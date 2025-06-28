@@ -59,12 +59,25 @@ def read_files(file_paths):
             contents[path] = f.read()
     return contents
 
-def export_md_file(source_content, filename=f"{os.path.splitext(os.path.basename(__file__))[0]}-monofile.md"):
-    with open(filename, 'w', encoding='utf-8') as f:
+def export_md_file(source_content, filename=None):
+    # Get the directory of the current script
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # Default filename if not provided
+    if filename is None:
+        script_name = os.path.splitext(os.path.basename(__file__))[0]
+        filename = f"{script_name}-monofile.md"
+    
+    # Create the full path
+    full_path = os.path.join(script_dir, filename)
+    
+    # Write content to the file
+    with open(full_path, 'w', encoding='utf-8') as f:
         for path, content in source_content.items():
             f.write(f"## SOURCE: {os.path.basename(path)}\n")
             f.write("```\n" + content + "\n```\n\n")
-    print(f"Saved selected files to: {filename}")
+    
+    print(f"Saved selected files to: {full_path}")
 
 def write_or_warn_from_claude_output(output_text):
     file_pattern = re.compile(r'^--- (.+?) ---$', re.MULTILINE)
