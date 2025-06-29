@@ -105,7 +105,7 @@ def write_or_warn_from_claude_output(output_text):
     print(f"\nSummary: {files_written} file(s) written, {files_warned} file(s) marked for deletion (not deleted).")
 
 def main():
-    load_dotenv()
+    load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
     run_claude = '-ai' in sys.argv
 
     # Check for uncommitted git changes
