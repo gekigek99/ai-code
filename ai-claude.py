@@ -7,18 +7,23 @@ from dotenv import load_dotenv
 import subprocess
 
 # TODO: Claude ai send full code folder structure with prompt
-# TODO: repository git a parte ed import come submodule
 
 # Define the directories to scan
-SOURCE_DIRS = ["src\\",
-]
-EXCLUDE_DIRS = [
-]
+SOURCE_DIRS = ["src"]
+EXCLUDE_DIRS = []
+TREE_DIRS = ["src", "src/utils", "src/database/migrations", "tech"]
 PROMPT = """
 if user data is not inserted in config screen, prompt for user data insertion at first startup + add a start logo of 2 seconds at beginning
 """
 
+script_path = os.path.abspath(__file__)
+script_dir = os.path.dirname(script_path)
+script_dir_name = os.path.basename(script_dir)
+script_file_name = os.path.basename(script_path)
+script_base_name = os.path.splitext(script_file_name)[0]  # name without extension
+
 def gather_source_files(dirs):
+    print("\nScanning source directories...")
     all_files = set()
     for d in dirs:
         # Grab everything recursively
@@ -31,7 +36,6 @@ def gather_source_files(dirs):
             if any(os.path.commonpath([f, ex]) == ex for ex in EXCLUDE_DIRS):
                 continue
             all_files.add(f)
-    print("\n".join(all_files))
     return list(all_files)
 
 def is_binary_file(path):
@@ -45,6 +49,7 @@ def is_binary_file(path):
         return True  # treat as binary if unreadable
     
 def read_files(file_paths):
+    print("Reading files...")
     contents = {}
     for path in file_paths:
         if not os.path.isfile(path):
@@ -59,25 +64,10 @@ def read_files(file_paths):
             contents[path] = f.read()
     return contents
 
-def export_md_file(source_content, filename=None):
-    # Get the directory of the current script
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    
-    # Default filename if not provided
-    if filename is None:
-        script_name = os.path.splitext(os.path.basename(__file__))[0]
-        filename = f"{script_name}-monofile.md"
-    
-    # Create the full path
-    full_path = os.path.join(script_dir, filename)
-    
-    # Write content to the file
-    with open(full_path, 'w', encoding='utf-8') as f:
-        for path, content in source_content.items():
-            f.write(f"## SOURCE: {os.path.basename(path)}\n")
-            f.write("```\n" + content + "\n```\n\n")
-    
-    print(f"Saved selected files to: {full_path}")
+def export_md_file(data, filename=os.path.join(script_dir, f"{script_base_name}-userfullprompt.md")):
+    with open(filename, 'w', encoding='utf-8') as f:
+        f.write(f"{data}")
+    print(f"Saved selected files to: {filename}")
 
 def write_or_warn_from_claude_output(output_text):
     file_pattern = re.compile(r'^--- (.+?) ---$', re.MULTILINE)
@@ -104,8 +94,60 @@ def write_or_warn_from_claude_output(output_text):
 
     print(f"\nSummary: {files_written} file(s) written, {files_warned} file(s) marked for deletion (not deleted).")
 
+def get_directory_tree(base_dirs):
+    print("Building directory tree...")
+    project_root = os.path.abspath(os.getcwd())
+    output_lines = []
+
+    def is_nested(child, parents):
+        child = os.path.abspath(child)
+        for parent in parents:
+            parent = os.path.abspath(parent)
+            if os.path.commonpath([child, parent]) == parent and child != parent:
+                return True
+        return False
+
+    def walk_dir(path, prefix=""):
+        try:
+            entries = sorted(os.listdir(path))
+        except Exception as e:
+            output_lines.append(f"{prefix}[Error reading {path}]: {e}")
+            return
+        for i, entry in enumerate(entries):
+            full_path = os.path.join(path, entry)
+            is_last = (i == len(entries) - 1)
+            connector = "└── " if is_last else "├── "
+            output_lines.append(f"{prefix}{connector}{entry}")
+            if os.path.isdir(full_path):
+                extension = "    " if is_last else "│   "
+                walk_dir(full_path, prefix + extension)
+
+    abs_dirs = [os.path.abspath(d) for d in base_dirs]
+
+    # Check for missing directories
+    missing_dirs = [d for d in abs_dirs if not os.path.isdir(d)]
+    if missing_dirs:
+        output_lines.append("\nERROR: The following directory(ies) do not exist:")
+        for d in missing_dirs:
+            rel_path = os.path.relpath(d, start=project_root)
+            output_lines.append(f" - {rel_path}")
+        return "\n".join(output_lines)
+
+    # Filter out nested dirs
+    roots_to_print = []
+    for d in abs_dirs:
+        if not is_nested(d, roots_to_print):
+            roots_to_print.append(d)
+
+    for dir in roots_to_print:
+        rel_name = os.path.relpath(dir, start=project_root)
+        output_lines.append(f"\nDirectory tree structure for {rel_name}\\")
+        walk_dir(dir)
+
+    return "\n".join(output_lines)
+
 def main():
-    load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+    load_dotenv(dotenv_path=os.path.join(script_dir, ".env"))
     run_claude = '-ai' in sys.argv
 
     # Check for uncommitted git changes
@@ -114,22 +156,20 @@ def main():
         print("Please commit or stash your changes before running this script.")
         sys.exit(1)
 
-    print("Scanning source directories...")
-    source_files = gather_source_files(SOURCE_DIRS)
-    source_content = read_files(source_files)
+    tree_dirs = get_directory_tree(TREE_DIRS)
+    source_content = read_files(gather_source_files(SOURCE_DIRS))
+    data_files = ""
+    for path, content in source_content.items():
+        data_files += f"\n--- {path} ---\n{content}\n"
 
-    print(f"Input tokens [ESTIMATED]: {len(PROMPT) + len("\n".join([s+c for s, c in source_content.items()])) // 4}")
+    print(f"Input tokens [ESTIMATED]: {len(PROMPT) + len(tree_dirs) + len(data_files) // 4}")
 
     if not run_claude:
-        export_md_file(source_content)
+        export_md_file("\n".join([PROMPT, tree_dirs, data_files]))
         return
 
     client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
     print("Sending request to Claude...")
-
-    data_files = ""
-    for path, content in source_content.items():
-        data_files += f"\n--- {path} ---\n{content}\n"
 
     response = client.messages.create(
         model=os.getenv("ANTHROPIC_CLAUDE_MODEL"),
@@ -145,6 +185,7 @@ def main():
             ),
         messages=[
             {"role": "user", "content": [{"type": "text", "text": PROMPT}]},
+            {"role": "user", "content": [{"type": "text", "text": f"Directory tree structure: {tree_dirs}"}]},
             {"role": "user", "content": [{"type": "text", "text": data_files}]}
             ],
         tools=[],
@@ -175,16 +216,18 @@ def has_uncommitted_changes():
         text=True,
     )
     changes = result.stdout.strip().splitlines()
+    
     changes_count = 0
     for line in changes:
-        if os.path.basename(os.path.abspath(__file__)) in line:
+        if not line.strip():
             continue
-        changes_count += 1
-    
-    if changes_count != 0:
-        return True
-    return False
 
+        if script_dir_name in line:
+            continue
+
+        changes_count += 1
+
+    return changes_count != 0
 
 if __name__ == "__main__":
     main()
