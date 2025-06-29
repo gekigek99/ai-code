@@ -6,12 +6,14 @@ from anthropic import Anthropic
 from dotenv import load_dotenv
 import subprocess
 
-# TODO: Claude ai send full code folder structure with prompt
+# to run:
+# setup SOURCE_DIRS, EXCLUDE_DIRS, TREE_DIRS, PROMPT
+# python ai-claude.py -ai
 
 # Define the directories to scan
-SOURCE_DIRS = ["src"]
+SOURCE_DIRS = ["src", "tech"]
 EXCLUDE_DIRS = []
-TREE_DIRS = ["src", "src/utils", "src/database/migrations", "tech"]
+TREE_DIRS = ["src", "tech"]
 PROMPT = """
 if user data is not inserted in config screen, prompt for user data insertion at first startup + add a start logo of 2 seconds at beginning
 """
