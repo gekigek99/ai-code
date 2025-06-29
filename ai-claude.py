@@ -7,7 +7,6 @@ from dotenv import load_dotenv
 import subprocess
 
 # TODO: Claude ai send full code folder structure with prompt
-# TODO: repository git a parte ed import come submodule
 
 # Define the directories to scan
 SOURCE_DIRS = ["src\\",
@@ -17,6 +16,9 @@ EXCLUDE_DIRS = [
 PROMPT = """
 if user data is not inserted in config screen, prompt for user data insertion at first startup + add a start logo of 2 seconds at beginning
 """
+
+script_dir = os.path.dirname(os.path.abspath(__file__))
+script_dir_name = os.path.basename(script_dir)
 
 def gather_source_files(dirs):
     all_files = set()
@@ -59,7 +61,7 @@ def read_files(file_paths):
             contents[path] = f.read()
     return contents
 
-def export_md_file(source_content, filename=f"{os.path.splitext(os.path.basename(__file__))[0]}-monofile.md"):
+def export_md_file(source_content, filename=os.path.join(script_dir, f"{script_dir_name}-monofile.md")):
     with open(filename, 'w', encoding='utf-8') as f:
         for path, content in source_content.items():
             f.write(f"## SOURCE: {os.path.basename(path)}\n")
@@ -92,7 +94,7 @@ def write_or_warn_from_claude_output(output_text):
     print(f"\nSummary: {files_written} file(s) written, {files_warned} file(s) marked for deletion (not deleted).")
 
 def main():
-    load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+    load_dotenv(dotenv_path=os.path.join(script_dir, ".env"))
     run_claude = '-ai' in sys.argv
 
     # Check for uncommitted git changes
@@ -162,16 +164,18 @@ def has_uncommitted_changes():
         text=True,
     )
     changes = result.stdout.strip().splitlines()
+    
     changes_count = 0
     for line in changes:
-        if os.path.basename(os.path.abspath(__file__)) in line:
+        if not line.strip():
             continue
-        changes_count += 1
-    
-    if changes_count != 0:
-        return True
-    return False
 
+        if script_dir_name in line:
+            continue
+
+        changes_count += 1
+
+    return changes_count != 0
 
 if __name__ == "__main__":
     main()
