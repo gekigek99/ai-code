@@ -11,11 +11,10 @@ import subprocess
 # python ai-claude.py -ai
 
 # Define the directories to scan
-SOURCE_DIRS = ["src", "tech"]
-EXCLUDE_DIRS = []
-TREE_DIRS = ["src", "tech"]
+SOURCE_DIRS = ["."]
+EXCLUDE_DIRS = [".git", "ai-tools", "generation", "logs", "node_modules", "uploads", ".help.md", "package-lock.json"]
+TREE_DIRS = ["."]
 PROMPT = """
-if user data is not inserted in config screen, prompt for user data insertion at first startup + add a start logo of 2 seconds at beginning
 """
 
 script_path = os.path.abspath(__file__)
@@ -100,6 +99,7 @@ def get_directory_tree(base_dirs):
     print("Building directory tree...")
     project_root = os.path.abspath(os.getcwd())
     output_lines = []
+    exclude_abs = [os.path.abspath(d) for d in EXCLUDE_DIRS]
 
     def is_nested(child, parents):
         child = os.path.abspath(child)
@@ -109,7 +109,13 @@ def get_directory_tree(base_dirs):
                 return True
         return False
 
+    def is_excluded(path):
+        path = os.path.abspath(path)
+        return any(os.path.commonpath([path, ex]) == ex for ex in exclude_abs)
+
     def walk_dir(path, prefix=""):
+        if is_excluded(path):
+            return  # Skip entire subtree
         try:
             entries = sorted(os.listdir(path))
         except Exception as e:
@@ -117,6 +123,8 @@ def get_directory_tree(base_dirs):
             return
         for i, entry in enumerate(entries):
             full_path = os.path.join(path, entry)
+            if is_excluded(full_path):
+                continue
             is_last = (i == len(entries) - 1)
             connector = "└── " if is_last else "├── "
             output_lines.append(f"{prefix}{connector}{entry}")
@@ -142,11 +150,14 @@ def get_directory_tree(base_dirs):
             roots_to_print.append(d)
 
     for dir in roots_to_print:
+        if is_excluded(dir):
+            continue
         rel_name = os.path.relpath(dir, start=project_root)
         output_lines.append(f"\nDirectory tree structure for {rel_name}\\")
         walk_dir(dir)
 
     return "\n".join(output_lines)
+
 
 def main():
     load_dotenv(dotenv_path=os.path.join(script_dir, ".env"))
