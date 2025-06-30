@@ -87,7 +87,8 @@ def export_md_file(data, filename):
 def write_or_warn_from_claude_output(output_text):
     export_md_file(output_text, filename=os.path.join(script_dir, f"{script_base_name}-clauderesponse.md"))
 
-    file_pattern = re.compile(r'^--- (.+?) ---$', re.MULTILINE)
+    # Updated pattern to match +++ filename +++ format
+    file_pattern = re.compile(r'^\+\+\+ (.+?) \+\+\+$', re.MULTILINE)
     parts = file_pattern.split(output_text)
     
     files_written = 0
@@ -102,6 +103,17 @@ def write_or_warn_from_claude_output(output_text):
             print(f"WARNING: Claude suggests deleting '{file_to_delete}'")
             files_warned += 1
             continue
+
+        # Extract content from code blocks
+        code_block_pattern = re.compile(r'^```(?:[a-zA-Z0-9_+-]*\n)?(.*?)```$', re.MULTILINE | re.DOTALL)
+        code_match = code_block_pattern.search(content)
+        
+        if code_match:
+            # Extract content from within code blocks
+            content = code_match.group(1).strip()
+        else:
+            # If no code blocks found, clean up the content
+            content = content.strip()
 
         # Fix for empty directory names
         dir_name = os.path.dirname(file_name)
@@ -232,9 +244,9 @@ def main():
         system=(
             "You are a senior expo developer assistant. Analyze the following project files and help the user with described issues by rewriting, modifying, deleting, refactoring the code\n"
             "Make improvements or refactors. If a file should be deleted, write:\n"
-            "--- path/to/file.ext [DELETE] ---\n(no content needed).\n"
+            "+++ path/to/file.ext [DELETE] +++\n(no content needed).\n"
             "If you want to create or overwrite a file, return the full updated code in this format:\n"
-            "--- path/to/file.ext ---\n<new content>\n"
+            "+++ path/to/file.ext +++\n```\n<new content>\n```\n"
             "Only output updated, new, or deleted files.\n\n"
         ),
         messages=[
@@ -335,4 +347,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
