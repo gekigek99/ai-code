@@ -11,24 +11,56 @@ import subprocess
 # python ai-claude.py -ai
 
 # Define the directories to scan
-SOURCE_DIRS = ["tech"]
-EXCLUDE_DIRS = [".git", "ai-tools", "generation", "logs", "node_modules", "uploads", ".help.md", "package-lock.json"]
-TREE_DIRS = ["tech"]
+SOURCE_DIRS = ["."]
+EXCLUDE_DIRS = [".git", "ai-tools", "generation", "logs", "node_modules", "uploads", ".help.md", "package-lock.json", "tech"]
+TREE_DIRS = ["."]
 PROMPT = """
-When i click on "accedi" in localhost:3000 i get the error from page http://localhost:3000/register: "route not found". 
+THE NEXT PROMPT COMMAND IS FOR THE PRODUCTION WEBSITE, WE ARE GOIN PUBLIC SO EVERYTHING MUST BE WORKING ALSO ON THE BACKEND, BE SECURE SCALABLE AND DEFINITIVE.
+It's essential you give a comprehensive explanation using code comments for future reference documentation.
 
-This is the console log:
-GET
-http://localhost:3000/login
-[HTTP/1.1 404 Not Found 3ms]
+-------------------------------
+Refactor the code to make it more organized. Make the graphics/css/layout files in common folders and reuse them as much as possible to avoid unnecessary repetition. The objective is to delete files so I expect you to delete some.
 
-GET
-http://localhost:3000/favicon.ico
-NS_ERROR_DOM_CORP_FAILED
+-------------------------------
+Modify the website logic to support link share copy paste for each doctor:
+instead of http://localhost:3000/dashboard i want  http://localhost:3000/<doctor-id>/dashboard, so that users can directly share the website.link/<doctor-id>. Implement the logic so that if a doctor shares http://localhost:3000/<doctor-id>/add-surgeries or http://localhost:3000/<doctor-id>/dashboard or some specific personal page, the receiving user, if not authorized will be redirected to  http://localhost:3000/<doctor-id>.
 
-La risorsa "http://localhost:3000/favicon.ico" è stata bloccata a causa dell'header Cross-Origin-Resource-Policy (o dalla mancanza di tale header). Per ulteriori informazioni vedi https://developer.mozilla.org/docs/Web/HTTP/Cross-Origin_Resource_Policy_(CORP)# login
+-------------------------------
+Fix also this warning:
+npm run dev
 
-Fix this error, so that i can access with the example seed credential I already setup on database.
+> salutismeae@1.0.0 dev
+> nodemon src/server.js
+
+[nodemon] 3.1.10
+[nodemon] to restart at any time, enter `rs`
+[nodemon] watching path(s): *.*
+[nodemon] watching extensions: js,mjs,cjs,json
+[nodemon] starting `node src/server.js`
+Environment check:
+DATABASE_URL exists: true
+DB_PASSWORD exists: true
+NODE_ENV: development
+Database config: {
+  host: 'using connection string',
+  database: undefined,
+  user: undefined,
+  password: 'NOT SET'
+}
+"""
+
+"""
+THE NEXT PROMPT COMMAND IS FOR THE PRODUCTION WEBSITE, WE ARE GOIN PUBLIC SO EVERYTHING MUST BE WORKING ALSO ON THE BACKEND, BE SECURE SCALABLE AND DEFINITIVE.
+It's essential you give a comprehensive explanation using code comments for future reference documentation.
+
+implement user page config
+"""
+
+"""
+THE NEXT PROMPT COMMAND IS FOR THE PRODUCTION WEBSITE, WE ARE GOIN PUBLIC SO EVERYTHING MUST BE WORKING ALSO ON THE BACKEND, BE SECURE SCALABLE AND DEFINITIVE.
+It's essential you give a comprehensive explanation using code comments for future reference documentation.
+
+implement payment page feature, it must be working also on the backend with database traking of payments and email notifications. the api key should be set in environment.
 """
 
 script_path = os.path.abspath(__file__)
@@ -84,48 +116,51 @@ def export_md_file(data, filename):
         f.write(f"{data}")
     print(f"Saved selected files to: {filename}")
 
-def write_or_warn_from_claude_output(output_text):
-    export_md_file(output_text, filename=os.path.join(script_dir, f"{script_base_name}-clauderesponse.md"))
 
-    # Updated pattern to match +++ filename +++ format
-    file_pattern = re.compile(r'^\+\+\+ (.+?) \+\+\+$', re.MULTILINE)
+def write_or_warn_from_claude_output(output_text):
+    export_md_file(
+        output_text,
+        filename=os.path.join(script_dir, f"{script_base_name}-clauderesponse.md")
+    )
+
+    # Match “+++ filename +++” or “+++ filename [TAG] +++”
+    file_pattern = re.compile(
+        r'^\+\+\+\s*'            # “+++ ” (leading)
+        r'(.+?)'                 #   group(1)=filename
+        r'(?:\s*\[([A-Z]+)\])?'  #   opt group(2)=TAG like UPDATE or DELETE
+        r'\s*\+\+\+$',           # “ +++” (trailing)
+        re.MULTILINE
+    )
     parts = file_pattern.split(output_text)
-    
+
     files_written = 0
     files_warned = 0
 
-    for i in range(1, len(parts), 2):
-        file_name = parts[i].strip()
-        content = parts[i+1].strip()
+    for i in range(1, len(parts), 3):
+        file_name, tag, content_block = parts[i], parts[i+1], parts[i+2]
 
-        if "[DELETE]" in file_name.upper():
-            file_to_delete = file_name.replace("[DELETE]", "").strip()
-            print(f"WARNING: Claude suggests deleting '{file_to_delete}'")
+        # If tag is DELETE, warn and skip writing
+        if tag == "DELETE":
+            print(f"DELETE: '{file_name}'")
             files_warned += 1
             continue
 
-        # Extract content from code blocks
-        code_block_pattern = re.compile(r'^```(?:[a-zA-Z0-9_+-]*\n)?(.*?)```$', re.MULTILINE | re.DOTALL)
-        code_match = code_block_pattern.search(content)
-        
-        if code_match:
-            # Extract content from within code blocks
-            content = code_match.group(1).strip()
-        else:
-            # If no code blocks found, clean up the content
-            content = content.strip()
+        # Extract code from ```…``` if present
+        m = re.search(r'```(?:[^\n]*\n)?(.*?)```', content_block, re.DOTALL)
+        content = m.group(1).rstrip() if m else content_block.strip()
 
-        # Fix for empty directory names
-        dir_name = os.path.dirname(file_name)
-        if dir_name:  # Only create directory if it's not empty
-            os.makedirs(dir_name, exist_ok=True)
-            
+        # Ensure directory exists (or use '.' for top-level files)
+        target_dir = os.path.dirname(file_name) or '.'
+        os.makedirs(target_dir, exist_ok=True)
+
+        # Write file
         with open(file_name, 'w', encoding='utf-8') as f:
             f.write(content + '\n')
         print(f"File written: {file_name}")
         files_written += 1
 
     print(f"\nSummary: {files_written} file(s) written, {files_warned} file(s) marked for deletion (not deleted).")
+
 
 def get_directory_tree(base_dirs):
     print("Building directory tree...")
@@ -214,12 +249,27 @@ def has_uncommitted_changes():
 def main():
     load_dotenv(dotenv_path=os.path.join(script_dir, ".env"))
     run_claude = '-ai' in sys.argv
+    run_readlast = '-readlast' in sys.argv
 
     # Check for uncommitted git changes
     if has_uncommitted_changes():
         print("ERROR: You have uncommitted changes in your git repository.")
         print("Please commit or stash your changes before running this script.")
         sys.exit(1)
+
+    if run_readlast:
+        print("Applying files from last Claude response (ai-claude-clauderesponse.md)...")
+        md_path = os.path.join(script_dir, f"{script_base_name}-clauderesponse.md")
+        if not os.path.isfile(md_path):
+            print(f"File not found: {md_path}")
+            sys.exit(2)
+        with open(md_path, encoding="utf-8") as f:
+            data_response = f.read()
+        if data_response.strip():
+            write_or_warn_from_claude_output(data_response)
+        else:
+            print("Empty clauderesponse file.")
+        return
 
     tree_dirs = get_directory_tree(TREE_DIRS)
     source_content = read_files(gather_source_files(SOURCE_DIRS))
