@@ -14,19 +14,11 @@ import subprocess
 SOURCE_DIRS = ["."]
 EXCLUDE_DIRS = [".git", "ai-tools", "generation", "logs", "node_modules", "uploads", ".help.md", "package-lock.json", "tech"]
 TREE_DIRS = ["."]
-PROMPT = """
+PROMPT = r"""
 THE NEXT PROMPT COMMAND IS FOR THE PRODUCTION WEBSITE, WE ARE GOIN PUBLIC SO EVERYTHING MUST BE WORKING ALSO ON THE BACKEND, BE SECURE SCALABLE AND DEFINITIVE.
-It's essential you give a comprehensive explanation using code comments for future reference documentation.
+It's essential you give a comprehensive explanation using code comments for future reference documentation. Think througry all the steps, be astonishingly complete and metodological in the implementation of each single objective. Split the objectives I'm providing in small technical tasks and solve each of them one after the other. You will need to fill in and extrapolate a lot of technical steps which are not clearly defined, but are essential to bring the website to production.
 
--------------------------------
-Refactor the code to make it more organized. Make the graphics/css/layout files in common folders and reuse them as much as possible to avoid unnecessary repetition. The objective is to delete files so I expect you to delete some.
-
--------------------------------
-Modify the website logic to support link share copy paste for each doctor:
-instead of http://localhost:3000/dashboard i want  http://localhost:3000/<doctor-id>/dashboard, so that users can directly share the website.link/<doctor-id>. Implement the logic so that if a doctor shares http://localhost:3000/<doctor-id>/add-surgeries or http://localhost:3000/<doctor-id>/dashboard or some specific personal page, the receiving user, if not authorized will be redirected to  http://localhost:3000/<doctor-id>.
-
--------------------------------
-Fix also this warning:
+Fix this warning:
 npm run dev
 
 > salutismeae@1.0.0 dev
@@ -250,9 +242,10 @@ def main():
     load_dotenv(dotenv_path=os.path.join(script_dir, ".env"))
     run_claude = '-ai' in sys.argv
     run_readlast = '-readlast' in sys.argv
+    force = '-f' in sys.argv
 
     # Check for uncommitted git changes
-    if has_uncommitted_changes():
+    if not force and has_uncommitted_changes():
         print("ERROR: You have uncommitted changes in your git repository.")
         print("Please commit or stash your changes before running this script.")
         sys.exit(1)
