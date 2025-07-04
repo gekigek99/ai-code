@@ -14,31 +14,27 @@ import subprocess
 SOURCE_DIRS = ["."]
 EXCLUDE_DIRS = [".git", "ai-tools", "generation", "logs", "node_modules", "uploads", ".help.md", "package-lock.json", "tech"]
 TREE_DIRS = ["."]
+SYSTEM = r"""
+You are a senior expo developer assistant. Analyze the following project files and help the user with described issues by rewriting, modifying, deleting, refactoring the code.
+
+You are responsible for preparing the production website for public launch. Treat this as a mission-critical deployment: the website must be fully functional across both frontend and backend, rigorously secure, easily scalable, and robustly engineered for ongoing public usage. As you work, think methodically and comprehensively through every stage of implementation and do not overlook any implicit or supporting technical steps crucial to production readiness, even if not explicitly described in initial objectives.
+
+For all code and configuration, provide deeply informative comments that clarify your logic, document all decisions, and support future maintenance or handovers. As you develop solutions, meticulously break down each objective into the smallest possible technical actions and address them one at a time, only proceeding once each is thorough and sound.
+
+Implement all work following industry best practices for security, scalability, reliability, and long-term support. Proactively include essential techniques such as input validation, error management, logging, and operational monitoring. Consider compliance and data protection throughout. Design everything so that it is AI-ready: this means explicitly describing points in the codebase and architecture where AI models, logic, automation, analytics, or APIs can later be integrated with minimal refactoring, and providing hooks or scaffolding for such future capabilities.
+
+For each decision and implementation step, provide full explanations and rationale, using clear code comments for technical documentation. Ensure that the delivered solution is exhaustive, production-grade, maintainable, and anticipates all reasonable future needs—especially. Do not provide summaries, layout, or graphic elements; concentrate on precise, actionable development and documentation only.
+
+Make improvements or refactors. If a file should be deleted, write:"
++++ path/to/file.ext [DELETE] +++\n(no content needed)
+
+If you want to create or overwrite a file, return the full updated code in this format:
++++ path/to/file.ext +++\n```\n<new content>\n```
+
+Only output updated, new, or deleted files."""
+
 PROMPT = r"""
-THE NEXT PROMPT COMMAND IS FOR THE PRODUCTION WEBSITE, WE ARE GOIN PUBLIC SO EVERYTHING MUST BE WORKING ALSO ON THE BACKEND, BE SECURE SCALABLE AND DEFINITIVE.
-It's essential you give a comprehensive explanation using code comments for future reference documentation. Think througry all the steps, be astonishingly complete and metodological in the implementation of each single objective. Split the objectives I'm providing in small technical tasks and solve each of them one after the other. You will need to fill in and extrapolate a lot of technical steps which are not clearly defined, but are essential to bring the website to production.
 
-Fix this warning:
-npm run dev
-
-> salutismeae@1.0.0 dev
-> nodemon src/server.js
-
-[nodemon] 3.1.10
-[nodemon] to restart at any time, enter `rs`
-[nodemon] watching path(s): *.*
-[nodemon] watching extensions: js,mjs,cjs,json
-[nodemon] starting `node src/server.js`
-Environment check:
-DATABASE_URL exists: true
-DB_PASSWORD exists: true
-NODE_ENV: development
-Database config: {
-  host: 'using connection string',
-  database: undefined,
-  user: undefined,
-  password: 'NOT SET'
-}
 """
 
 """
@@ -273,7 +269,7 @@ def main():
     print(f"Input tokens [ESTIMATED]: {len(PROMPT) + len(tree_dirs) + len(data_files) // 4}")
 
     if not run_claude:
-        export_md_file("\n".join([PROMPT, tree_dirs, data_files]), os.path.join(script_dir, f"{script_base_name}-userfullprompt.md"))
+        export_md_file("\n".join([SYSTEM, PROMPT, tree_dirs, data_files]), os.path.join(script_dir, f"{script_base_name}-userfullprompt.md"))
         return
 
     client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
@@ -284,14 +280,7 @@ def main():
         model=os.getenv("ANTHROPIC_CLAUDE_MODEL"),
         max_tokens=int(os.getenv("ANTHROPIC_MAX_TOKENS")),
         temperature=1,
-        system=(
-            "You are a senior expo developer assistant. Analyze the following project files and help the user with described issues by rewriting, modifying, deleting, refactoring the code\n"
-            "Make improvements or refactors. If a file should be deleted, write:\n"
-            "+++ path/to/file.ext [DELETE] +++\n(no content needed).\n"
-            "If you want to create or overwrite a file, return the full updated code in this format:\n"
-            "+++ path/to/file.ext +++\n```\n<new content>\n```\n"
-            "Only output updated, new, or deleted files.\n\n"
-        ),
+        system=SYSTEM,
         messages=[
             {"role": "user", "content": [{"type": "text", "text": PROMPT}]},
             {"role": "user", "content": [{"type": "text", "text": f"Directory tree structure: {tree_dirs}"}]},
