@@ -34,20 +34,58 @@ If you want to create or overwrite a file, return the full updated code in this 
 Only output updated, new, or deleted files."""
 
 PROMPT = r"""
+Remove all the docker configuration and usage, discard the cache configs. I don't want to use at all docker for now.
 
+Use simply local file storage for user files. Store each user file in its user id sub-folder.
+
+Use just a local database with sqlite3.
+
+
+
+Environment & Configuration Management
+    “Use a .env file (with dotenv) to load secrets—do not hard‑code any API keys, database paths, or encryption salts.”
+    “Validate that all required environment variables are present at startup, and fail fast with a clear error if any are missing.”
+
+Database Schema & Migrations
+    “Set up SQLite with a migrations system (e.g. knex or typeorm) so future schema changes are versioned and reversible.”
+    “Include an initial migration to create the users, files, and any join tables, with appropriate indexes (e.g. index on user_id).”
+
+File‑Storage Structure & Security
+    “Enforce path‐sanitization so users can’t escape their own folder (e.g. no .. segments).”
+    “Generate file names server‑side with UUIDs, and store metadata (original name, content‑type) in the DB.”
+    “If you later serve files over HTTP, implement signed URLs or access checks on every download.”
+
+Input Validation & Error Handling
+    “Use a validation library (e.g. Joi) on all incoming requests—reject anything missing required shape or exceeding size limits.”
+    “Centralize error handling: any uncaught exception should be logged and return a sanitized 5xx response rather than a stack trace.”
+
+Logging & Monitoring Hooks
+    “Integrate a request‐logging middleware (e.g. morgan) and write logs in a structured JSON format to stdout.”
+    “Add stubbed hooks for future integration with Sentry or Datadog—e.g. wrap controllers to capture performance metrics.”
+
+Security Best Practices
+    “Use Helmet to set HTTP security headers (CSP, HSTS, X‑Frame‑Options).”
+    “Ensure all user‐facing endpoints are rate‑limited to defend against brute‐force or DoS.”
+    “Sanitize any HTML or Markdown input to prevent XSS (e.g. DOMPurify or a server‐side sanitizer).”
+
+Testing & CI
+    “Include unit tests for all business logic using Jest, and a GitHub Actions workflow that runs lint, type‑check, and test suites on every PR.”
+    “Mock the filesystem and DB in tests so you can reliably test file uploads and migrations.”
+
+Backup & Maintenance
+    “Provide a simple script (npm run backup) that dumps the SQLite database to a timestamped file in a backups/ folder.”
+    “Document how to compact the SQLite DB (VACUUM), and set expectations around concurrent writes (e.g. use a single writer).”
+
+Documentation & Comments
+    “Place a README in each major folder explaining its purpose (e.g. db for migrations, services for domain logic).”
+    “Annotate any non‑obvious security or performance decisions inline.”
 """
 
 """
-THE NEXT PROMPT COMMAND IS FOR THE PRODUCTION WEBSITE, WE ARE GOIN PUBLIC SO EVERYTHING MUST BE WORKING ALSO ON THE BACKEND, BE SECURE SCALABLE AND DEFINITIVE.
-It's essential you give a comprehensive explanation using code comments for future reference documentation.
-
 implement user page config
 """
 
 """
-THE NEXT PROMPT COMMAND IS FOR THE PRODUCTION WEBSITE, WE ARE GOIN PUBLIC SO EVERYTHING MUST BE WORKING ALSO ON THE BACKEND, BE SECURE SCALABLE AND DEFINITIVE.
-It's essential you give a comprehensive explanation using code comments for future reference documentation.
-
 implement payment page feature, it must be working also on the backend with database traking of payments and email notifications. the api key should be set in environment.
 """
 
@@ -56,6 +94,7 @@ script_dir = os.path.dirname(script_path)
 script_dir_name = os.path.basename(script_dir)
 script_file_name = os.path.basename(script_path)
 script_base_name = os.path.splitext(script_file_name)[0]  # name without extension
+
 
 def gather_source_files(dirs):
     print("\nScanning source directories...")
@@ -73,6 +112,7 @@ def gather_source_files(dirs):
             all_files.add(f)
     return list(all_files)
 
+
 def is_binary_file(path):
     try:
         with open(path, 'rb') as f:
@@ -82,7 +122,8 @@ def is_binary_file(path):
         return False
     except Exception:
         return True  # treat as binary if unreadable
-    
+
+
 def read_files(file_paths):
     print("Reading files...")
     contents = {}
@@ -98,6 +139,7 @@ def read_files(file_paths):
         with open(path, 'r', encoding='utf-8', errors='ignore') as f:
             contents[path] = f.read()
     return contents
+
 
 def export_md_file(data, filename):
     with open(filename, 'w', encoding='utf-8') as f:
@@ -122,15 +164,22 @@ def write_or_warn_from_claude_output(output_text):
     parts = file_pattern.split(output_text)
 
     files_written = 0
-    files_warned = 0
+    files_deleted = 0
 
     for i in range(1, len(parts), 3):
         file_name, tag, content_block = parts[i], parts[i+1], parts[i+2]
 
-        # If tag is DELETE, warn and skip writing
         if tag == "DELETE":
-            print(f"DELETE: '{file_name}'")
-            files_warned += 1
+            # Delete the file if it exists
+            if os.path.exists(file_name):
+                try:
+                    os.remove(file_name)
+                    files_deleted += 1
+                    print(f"File deleted: {file_name}")
+                except Exception as e:
+                    print(f"Error deleting {file_name}: {e}")
+            else:
+                print(f"File not found (for deletion): {file_name}")
             continue
 
         # Extract code from ```…``` if present
@@ -147,7 +196,7 @@ def write_or_warn_from_claude_output(output_text):
         print(f"File written: {file_name}")
         files_written += 1
 
-    print(f"\nSummary: {files_written} file(s) written, {files_warned} file(s) marked for deletion (not deleted).")
+    print(f"\nSummary: {files_written} file(s) written, {files_deleted} file(s) deleted.")
 
 
 def get_directory_tree(base_dirs):
@@ -212,6 +261,7 @@ def get_directory_tree(base_dirs):
         walk_dir(dir)
 
     return "\n".join(output_lines)
+
 
 def has_uncommitted_changes():
     result = subprocess.run(
@@ -316,8 +366,6 @@ def main():
                         # Thinking content (internal reasoning)
                         thinking_chunk = event.delta.thinking
                         thinking_content += thinking_chunk
-                        # Optionally display thinking process
-                        # print(f"[THINKING: {thinking_chunk}]", end="", flush=True)
                     elif event.delta.type == 'text_delta':
                         # Regular content from Claude
                         chunk = event.delta.text
@@ -376,6 +424,7 @@ def main():
         write_or_warn_from_claude_output(data_response)
     else:
         print("\nNo response received from Claude.")
+
 
 if __name__ == "__main__":
     main()
