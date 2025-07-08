@@ -1,93 +1,21 @@
 import os
 import sys
 import re
-import glob
 from anthropic import Anthropic
 from dotenv import load_dotenv
 import subprocess
+import yaml
+import fnmatch
 
-# to run:
-# setup SOURCE_DIRS, EXCLUDE_DIRS, TREE_DIRS, PROMPT
-# python ai-claude.py -ai
+# Load configuration from YAML
+with open(os.path.join(os.path.dirname(__file__), "ai-claude-prompt.yaml")) as f:
+    config = yaml.safe_load(f)
 
-# Define the directories to scan
-SOURCE_DIRS = ["."]
-EXCLUDE_DIRS = [".git", "ai-tools", "generation", "logs", "node_modules", "uploads", ".help.md", "package-lock.json", "tech"]
-TREE_DIRS = ["."]
-SYSTEM = r"""
-You are a senior expo developer assistant. Analyze the following project files and help the user with described issues by rewriting, modifying, deleting, refactoring the code.
-
-You are responsible for preparing the production website for public launch. Treat this as a mission-critical deployment: the website must be fully functional across both frontend and backend, rigorously secure, easily scalable, and robustly engineered for ongoing public usage. As you work, think methodically and comprehensively through every stage of implementation and do not overlook any implicit or supporting technical steps crucial to production readiness, even if not explicitly described in initial objectives.
-
-For all code and configuration, provide deeply informative comments that clarify your logic, document all decisions, and support future maintenance or handovers. As you develop solutions, meticulously break down each objective into the smallest possible technical actions and address them one at a time, only proceeding once each is thorough and sound.
-
-Implement all work following industry best practices for security, scalability, reliability, and long-term support. Proactively include essential techniques such as input validation, error management, logging, and operational monitoring. Consider compliance and data protection throughout. Design everything so that it is AI-ready: this means explicitly describing points in the codebase and architecture where AI models, logic, automation, analytics, or APIs can later be integrated with minimal refactoring, and providing hooks or scaffolding for such future capabilities.
-
-For each decision and implementation step, provide full explanations and rationale, using clear code comments for technical documentation. Ensure that the delivered solution is exhaustive, production-grade, maintainable, and anticipates all reasonable future needs—especially. Do not provide summaries, layout, or graphic elements; concentrate on precise, actionable development and documentation only.
-
-Make improvements or refactors. If a file should be deleted, write:"
-+++ path/to/file.ext [DELETE] +++\n(no content needed)
-
-If you want to create or overwrite a file, return the full updated code in this format:
-+++ path/to/file.ext +++\n```\n<new content>\n```
-
-Only output updated, new, or deleted files."""
-
-PROMPT = r"""
-Remove all the docker configuration and usage, discard the cache configs. I don't want to use at all docker for now.
-
-Use simply local file storage for user files. Store each user file in its user id sub-folder.
-
-Use just a local database with sqlite3.
-
-
-
-Environment & Configuration Management
-    “Use a .env file (with dotenv) to load secrets—do not hard‑code any API keys, database paths, or encryption salts.”
-    “Validate that all required environment variables are present at startup, and fail fast with a clear error if any are missing.”
-
-Database Schema & Migrations
-    “Set up SQLite with a migrations system (e.g. knex or typeorm) so future schema changes are versioned and reversible.”
-    “Include an initial migration to create the users, files, and any join tables, with appropriate indexes (e.g. index on user_id).”
-
-File‑Storage Structure & Security
-    “Enforce path‐sanitization so users can’t escape their own folder (e.g. no .. segments).”
-    “Generate file names server‑side with UUIDs, and store metadata (original name, content‑type) in the DB.”
-    “If you later serve files over HTTP, implement signed URLs or access checks on every download.”
-
-Input Validation & Error Handling
-    “Use a validation library (e.g. Joi) on all incoming requests—reject anything missing required shape or exceeding size limits.”
-    “Centralize error handling: any uncaught exception should be logged and return a sanitized 5xx response rather than a stack trace.”
-
-Logging & Monitoring Hooks
-    “Integrate a request‐logging middleware (e.g. morgan) and write logs in a structured JSON format to stdout.”
-    “Add stubbed hooks for future integration with Sentry or Datadog—e.g. wrap controllers to capture performance metrics.”
-
-Security Best Practices
-    “Use Helmet to set HTTP security headers (CSP, HSTS, X‑Frame‑Options).”
-    “Ensure all user‐facing endpoints are rate‑limited to defend against brute‐force or DoS.”
-    “Sanitize any HTML or Markdown input to prevent XSS (e.g. DOMPurify or a server‐side sanitizer).”
-
-Testing & CI
-    “Include unit tests for all business logic using Jest, and a GitHub Actions workflow that runs lint, type‑check, and test suites on every PR.”
-    “Mock the filesystem and DB in tests so you can reliably test file uploads and migrations.”
-
-Backup & Maintenance
-    “Provide a simple script (npm run backup) that dumps the SQLite database to a timestamped file in a backups/ folder.”
-    “Document how to compact the SQLite DB (VACUUM), and set expectations around concurrent writes (e.g. use a single writer).”
-
-Documentation & Comments
-    “Place a README in each major folder explaining its purpose (e.g. db for migrations, services for domain logic).”
-    “Annotate any non‑obvious security or performance decisions inline.”
-"""
-
-"""
-implement user page config
-"""
-
-"""
-implement payment page feature, it must be working also on the backend with database traking of payments and email notifications. the api key should be set in environment.
-"""
+SOURCE_DIRS = config.get("source_dirs", ["."])
+TREE_DIRS = config.get("tree_dirs") or SOURCE_DIRS
+EXCLUDE_PATTERNS = config.get("exclude_patterns", [])
+SYSTEM = config.get("system", "")
+PROMPT = config.get("prompt", "")
 
 script_path = os.path.abspath(__file__)
 script_dir = os.path.dirname(script_path)
@@ -95,22 +23,124 @@ script_dir_name = os.path.basename(script_dir)
 script_file_name = os.path.basename(script_path)
 script_base_name = os.path.splitext(script_file_name)[0]  # name without extension
 
+# Create output directory for all generated files
+output_dir = os.path.join(script_dir, script_base_name)
+os.makedirs(output_dir, exist_ok=True)
+
+
+def normalize_path(path):
+    """Normalize path for consistent pattern matching."""
+    # Convert to absolute path and normalize separators
+    abs_path = os.path.abspath(path)
+    # Convert to forward slashes for consistent matching
+    return abs_path.replace('\\', '/')
+
+
+def is_excluded(path, base_dir=None):
+    """Check if a path matches any exclude pattern."""
+    # Normalize the path for matching
+    norm_path = normalize_path(path)
+    
+    # Get the base name of the path (last component)
+    base_name = os.path.basename(path)
+    
+    # If base_dir is provided, get relative path for matching
+    if base_dir:
+        base_norm = normalize_path(base_dir)
+        try:
+            # Get relative path from base directory
+            rel_path = os.path.relpath(path, base_dir).replace('\\', '/')
+        except ValueError:
+            # If paths are on different drives on Windows, use full path
+            rel_path = norm_path
+    else:
+        # Try to get relative path from current directory
+        try:
+            rel_path = os.path.relpath(path).replace('\\', '/')
+        except ValueError:
+            rel_path = norm_path
+    
+    # Check each exclude pattern
+    for pattern in EXCLUDE_PATTERNS:
+        # Clean up the pattern - remove any trailing backslashes
+        pattern = pattern.rstrip('\\')
+        
+        # For directory patterns
+        if pattern.endswith('/'):
+            pattern_dir = pattern.rstrip('/')
+            # Check if this is a directory that matches the pattern
+            if os.path.isdir(path):
+                # Check base name match
+                if fnmatch.fnmatch(base_name, pattern_dir):
+                    return True
+                # Check if any parent directory matches
+                path_parts = rel_path.split('/')
+                for i in range(len(path_parts)):
+                    if fnmatch.fnmatch(path_parts[i], pattern_dir):
+                        return True
+            # Check if this is a file within an excluded directory
+            else:
+                # Check each directory component in the path
+                path_parts = rel_path.split('/')
+                for i in range(len(path_parts) - 1):  # Exclude last part (filename)
+                    if fnmatch.fnmatch(path_parts[i], pattern_dir):
+                        return True
+        
+        # For patterns without trailing slash (can match files or directories)
+        else:
+            # Direct base name match
+            if fnmatch.fnmatch(base_name, pattern):
+                return True
+            
+            # Check if it's a directory being treated as a file pattern
+            if os.path.isdir(path):
+                # Check each directory component
+                path_parts = rel_path.split('/')
+                for part in path_parts:
+                    if fnmatch.fnmatch(part, pattern):
+                        return True
+            else:
+                # For files, check the full relative path and base name
+                if fnmatch.fnmatch(rel_path, pattern):
+                    return True
+                # Also check if any parent directory matches
+                path_parts = rel_path.split('/')
+                for i in range(len(path_parts) - 1):
+                    if fnmatch.fnmatch(path_parts[i], pattern):
+                        return True
+    
+    return False
+
 
 def gather_source_files(dirs):
     print("\nScanning source directories...")
     all_files = set()
+    
     for d in dirs:
-        # Grab everything recursively
-        d = d.replace("/", "\\")
-        candidates = glob.glob(os.path.join(d, "**", "*"), recursive=True)
-        for f in candidates:
-            if not os.path.isfile(f):
-                continue
-            # Exclude files in EXCLUDE_DIRS
-            if any(os.path.commonpath([f, ex]) == ex for ex in EXCLUDE_DIRS):
-                continue
-            all_files.add(f)
-    return list(all_files)
+        # Normalize directory path
+        base_dir = os.path.abspath(d)
+        print(f"Scanning: {base_dir}")
+        
+        # Walk through directory tree
+        for root, dirnames, filenames in os.walk(base_dir):
+            # Filter out excluded directories before descending
+            dirnames[:] = [
+                dirname for dirname in dirnames 
+                if not is_excluded(os.path.join(root, dirname), base_dir)
+            ]
+            
+            # Check files
+            for filename in filenames:
+                filepath = os.path.join(root, filename)
+                
+                # Skip if excluded
+                if is_excluded(filepath, base_dir):
+                    continue
+                    
+                all_files.add(filepath)
+    
+    print(f"Found {len(all_files)} files after exclusion")
+    return sorted(list(all_files))
 
 
 def is_binary_file(path):
@@ -136,29 +166,34 @@ def read_files(file_paths):
             contents[path] = "[binary content]"
             continue
 
-        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-            contents[path] = f.read()
+        try:
+            with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                contents[path] = f.read()
+        except Exception as e:
+            print(f"Error reading {path}: {e}")
+            contents[path] = f"[Error reading file: {e}]"
     return contents
 
 
 def export_md_file(data, filename):
-    with open(filename, 'w', encoding='utf-8') as f:
+    """Export markdown file to the output directory."""
+    filepath = os.path.join(output_dir, filename)
+    with open(filepath, 'w', encoding='utf-8') as f:
         f.write(f"{data}")
-    print(f"Saved selected files to: {filename}")
+    print(f"Saved to: {filepath}")
 
 
 def write_or_warn_from_claude_output(output_text):
-    export_md_file(
-        output_text,
-        filename=os.path.join(script_dir, f"{script_base_name}-clauderesponse.md")
-    )
+    """Process Claude's response and write files."""
+    # Save the raw response to output directory
+    export_md_file(output_text, "clauderesponse.md")
 
-    # Match “+++ filename +++” or “+++ filename [TAG] +++”
+    # Match "+++ filename +++" or "+++ filename [TAG] +++"
     file_pattern = re.compile(
-        r'^\+\+\+\s*'            # “+++ ” (leading)
+        r'^\+\+\+\s*'            # "+++ " (leading)
         r'(.+?)'                 #   group(1)=filename
         r'(?:\s*\[([A-Z]+)\])?'  #   opt group(2)=TAG like UPDATE or DELETE
-        r'\s*\+\+\+$',           # “ +++” (trailing)
+        r'\s*\+\+\+$',           # " +++" (trailing)
         re.MULTILINE
     )
     parts = file_pattern.split(output_text)
@@ -203,7 +238,6 @@ def get_directory_tree(base_dirs):
     print("Building directory tree...")
     project_root = os.path.abspath(os.getcwd())
     output_lines = []
-    exclude_abs = [os.path.abspath(d) for d in EXCLUDE_DIRS]
 
     def is_nested(child, parents):
         child = os.path.abspath(child)
@@ -213,28 +247,30 @@ def get_directory_tree(base_dirs):
                 return True
         return False
 
-    def is_excluded(path):
-        path = os.path.abspath(path)
-        return any(os.path.commonpath([path, ex]) == ex for ex in exclude_abs)
-
-    def walk_dir(path, prefix=""):
-        if is_excluded(path):
+    def walk_dir(path, prefix="", base_dir=None):
+        if is_excluded(path, base_dir or path):
             return  # Skip entire subtree
         try:
             entries = sorted(os.listdir(path))
         except Exception as e:
             output_lines.append(f"{prefix}[Error reading {path}]: {e}")
             return
-        for i, entry in enumerate(entries):
+        
+        # Filter out excluded entries
+        filtered_entries = []
+        for entry in entries:
             full_path = os.path.join(path, entry)
-            if is_excluded(full_path):
-                continue
-            is_last = (i == len(entries) - 1)
+            if not is_excluded(full_path, base_dir or path):
+                filtered_entries.append(entry)
+        
+        for i, entry in enumerate(filtered_entries):
+            full_path = os.path.join(path, entry)
+            is_last = (i == len(filtered_entries) - 1)
             connector = "└── " if is_last else "├── "
             output_lines.append(f"{prefix}{connector}{entry}")
             if os.path.isdir(full_path):
                 extension = "    " if is_last else "│   "
-                walk_dir(full_path, prefix + extension)
+                walk_dir(full_path, prefix + extension, base_dir or path)
 
     abs_dirs = [os.path.abspath(d) for d in base_dirs]
 
@@ -257,8 +293,8 @@ def get_directory_tree(base_dirs):
         if is_excluded(dir):
             continue
         rel_name = os.path.relpath(dir, start=project_root)
-        output_lines.append(f"\nDirectory tree structure for {rel_name}\\")
-        walk_dir(dir)
+        output_lines.append(f"\nDirectory tree structure for {rel_name}/")
+        walk_dir(dir, base_dir=dir)
 
     return "\n".join(output_lines)
 
@@ -297,8 +333,8 @@ def main():
         sys.exit(1)
 
     if run_readlast:
-        print("Applying files from last Claude response (ai-claude-clauderesponse.md)...")
-        md_path = os.path.join(script_dir, f"{script_base_name}-clauderesponse.md")
+        print(f"Applying files from last Claude response ({output_dir}/clauderesponse.md)...")
+        md_path = os.path.join(output_dir, "clauderesponse.md")
         if not os.path.isfile(md_path):
             print(f"File not found: {md_path}")
             sys.exit(2)
@@ -319,7 +355,8 @@ def main():
     print(f"Input tokens [ESTIMATED]: {len(PROMPT) + len(tree_dirs) + len(data_files) // 4}")
 
     if not run_claude:
-        export_md_file("\n".join([SYSTEM, PROMPT, tree_dirs, data_files]), os.path.join(script_dir, f"{script_base_name}-userfullprompt.md"))
+        # Save the full prompt to output directory
+        export_md_file("\n".join([SYSTEM, PROMPT, tree_dirs, data_files]), "userfullprompt.md")
         return
 
     client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
@@ -408,14 +445,14 @@ def main():
             print(f"[Event details: {event}]")
             continue
 
-    # Save all data to separate files
+    # Save all data to output directory
     if thinking_content.strip():
-        export_md_file(thinking_content, os.path.join(script_dir, f"{script_base_name}-thinking.md"))
+        export_md_file(thinking_content, "thinking.md")
         print(f"\n[Claude processed {len(thinking_content)} characters of internal reasoning]")
         
     if raw_data:
         raw_data_str = "\n\n".join([f"Event Type: {item['type']}\nData: {item['event']}" for item in raw_data])
-        export_md_file(raw_data_str, os.path.join(script_dir, f"{script_base_name}-rawdata.md"))
+        export_md_file(raw_data_str, "rawdata.md")
         print(f"[Saved {len(raw_data)} raw events to file]")
 
     # Process the accumulated response
