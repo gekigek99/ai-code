@@ -36,6 +36,48 @@ def normalize_path(path):
     return abs_path.replace('\\', '/')
 
 
+def normalize_pattern(pattern):
+    """Normalize pattern for consistent matching."""
+    # Convert backslashes to forward slashes and remove trailing slashes
+    pattern = pattern.replace('\\', '/')
+    # Keep track of whether it was a directory pattern
+    is_dir = pattern.endswith('/')
+    pattern = pattern.rstrip('/')
+    return pattern, is_dir
+
+
+def path_matches_pattern(path, pattern):
+    """Check if a path matches a specific pattern, supporting multi-level paths."""
+    # Normalize both for comparison
+    norm_path = path.replace('\\', '/')
+    norm_pattern, is_dir_pattern = normalize_pattern(pattern)
+    
+    # For multi-level patterns (containing /), check if the pattern appears in the path
+    if '/' in norm_pattern:
+        # Check if the pattern matches the end of the path or appears as a complete segment
+        path_parts = norm_path.split('/')
+        pattern_parts = norm_pattern.split('/')
+        
+        # Check all possible positions where the pattern could match
+        for i in range(len(path_parts) - len(pattern_parts) + 1):
+            # Check if pattern matches at this position
+            match = True
+            for j, pattern_part in enumerate(pattern_parts):
+                if not fnmatch.fnmatch(path_parts[i + j], pattern_part):
+                    match = False
+                    break
+            if match:
+                return True
+        return False
+    else:
+        # Single-level pattern - check against each path component
+        path_parts = norm_path.split('/')
+        for part in path_parts:
+            if fnmatch.fnmatch(part, norm_pattern):
+                return True
+        return False
+
+
 def is_excluded(path, base_dir=None):
     """Check if a path matches any exclude pattern."""
     # Normalize the path for matching
@@ -62,58 +104,48 @@ def is_excluded(path, base_dir=None):
     
     # Check each exclude pattern
     for pattern in EXCLUDE_PATTERNS:
-        # Clean up the pattern - remove any trailing backslashes
-        pattern = pattern.rstrip('\\')
+        # Normalize the pattern
+        norm_pattern, is_dir_pattern = normalize_pattern(pattern)
         
-        # For directory patterns
-        if pattern.endswith('/'):
-            pattern_dir = pattern.rstrip('/')
-            # Check if this is a directory that matches the pattern
-            if os.path.isdir(path):
-                # Check base name match
-                if fnmatch.fnmatch(base_name, pattern_dir):
-                    return True
-                # Check if any parent directory matches
-                path_parts = rel_path.split('/')
-                for i in range(len(path_parts)):
-                    if fnmatch.fnmatch(path_parts[i], pattern_dir):
-                        return True
-            # Check if this is a file within an excluded directory
-            else:
-                # Check each directory component in the path
-                path_parts = rel_path.split('/')
-                for i in range(len(path_parts) - 1):  # Exclude last part (filename)
-                    if fnmatch.fnmatch(path_parts[i], pattern_dir):
-                        return True
-        
-        # For patterns without trailing slash (can match files or directories)
+        # Check for multi-level path patterns (containing /)
+        if '/' in norm_pattern:
+            # Check against relative path
+            if path_matches_pattern(rel_path, pattern):
+                return True
+            # Also check against the normalized full path
+            if path_matches_pattern(norm_path, pattern):
+                return True
         else:
-            # Direct base name match
-            if fnmatch.fnmatch(base_name, pattern):
+            # Single-level pattern
+            
+            # For .env* pattern, special handling
+            if norm_pattern.startswith('.') and '*' in norm_pattern:
+                if fnmatch.fnmatch(base_name, norm_pattern):
+                    return True
+            
+            # Check base name
+            if fnmatch.fnmatch(base_name, norm_pattern):
                 return True
             
-            # Check if it's a directory being treated as a file pattern
-            if os.path.isdir(path):
-                # Check each directory component
+            # For directories, check if any parent matches
+            if os.path.isdir(path) or is_dir_pattern:
                 path_parts = rel_path.split('/')
                 for part in path_parts:
-                    if fnmatch.fnmatch(part, pattern):
+                    if fnmatch.fnmatch(part, norm_pattern):
                         return True
-            else:
-                # For files, check the full relative path and base name
-                if fnmatch.fnmatch(rel_path, pattern):
-                    return True
-                # Also check if any parent directory matches
+            
+            # For files in excluded directories
+            if not os.path.isdir(path):
                 path_parts = rel_path.split('/')
-                for i in range(len(path_parts) - 1):
-                    if fnmatch.fnmatch(path_parts[i], pattern):
+                for i in range(len(path_parts) - 1):  # Exclude the filename
+                    if fnmatch.fnmatch(path_parts[i], norm_pattern):
                         return True
     
     return False
 
 
 def gather_source_files(dirs):
-    print("\nScanning source directories...")
+    print("\nGathering  source directories...")
     all_files = set()
     
     for d in dirs:
@@ -124,22 +156,29 @@ def gather_source_files(dirs):
         # Walk through directory tree
         for root, dirnames, filenames in os.walk(base_dir):
             # Filter out excluded directories before descending
-            dirnames[:] = [
-                dirname for dirname in dirnames 
-                if not is_excluded(os.path.join(root, dirname), base_dir)
-            ]
+            # Create a copy of dirnames to iterate over
+            dirs_to_check = dirnames[:]
+            dirnames.clear()  # Clear the original list
             
+            for dirname in dirs_to_check:
+                dirpath = os.path.join(root, dirname)
+                if not is_excluded(dirpath, base_dir):
+                    dirnames.append(dirname)  # Add back non-excluded directories
+                else:
+                    # print(f"  Excluding directory: {os.path.relpath(dirpath, base_dir)}")
+                    continue
+
             # Check files
             for filename in filenames:
                 filepath = os.path.join(root, filename)
                 
                 # Skip if excluded
                 if is_excluded(filepath, base_dir):
+                    # print(f"  Excluding file: {os.path.relpath(filepath, base_dir)}")
                     continue
                     
                 all_files.add(filepath)
     
-    print(f"Found {len(all_files)} files after exclusion")
     return sorted(list(all_files))
 
 
@@ -243,8 +282,12 @@ def get_directory_tree(base_dirs):
         child = os.path.abspath(child)
         for parent in parents:
             parent = os.path.abspath(parent)
-            if os.path.commonpath([child, parent]) == parent and child != parent:
-                return True
+            try:
+                if os.path.commonpath([child, parent]) == parent and child != parent:
+                    return True
+            except ValueError:
+                # Paths on different drives on Windows
+                continue
         return False
 
     def walk_dir(path, prefix="", base_dir=None):
@@ -296,7 +339,9 @@ def get_directory_tree(base_dirs):
         output_lines.append(f"\nDirectory tree structure for {rel_name}/")
         walk_dir(dir, base_dir=dir)
 
-    return "\n".join(output_lines)
+    dir_tree = "\n".join(output_lines)
+    print(dir_tree)
+    return dir_tree
 
 
 def has_uncommitted_changes():
@@ -350,7 +395,12 @@ def main():
     source_content = read_files(gather_source_files(SOURCE_DIRS))
     data_files = ""
     for path, content in source_content.items():
-        data_files += f"\n--- {path} ---\n{content}\n"
+        # Convert absolute path to relative path from current directory
+        rel_path = os.path.relpath(path).replace('\\', '/')
+        # Ensure it starts with ./
+        if not rel_path.startswith('./'):
+            rel_path = './' + rel_path
+        data_files += f"\n--- {rel_path} ---\n{content}\n"
 
     print(f"Input tokens [ESTIMATED]: {len(PROMPT) + len(tree_dirs) + len(data_files) // 4}")
 

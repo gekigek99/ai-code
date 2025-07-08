@@ -3,15 +3,10 @@ source_dirs: [
 ]
 
 exclude_patterns: [
-  "*.log",
-  "temp_*",
-  ".git/",
-  "logo/",
-  "hooks\\",
-  "output",
-  "*.bat",
   ".git*",
-  "ai-claude/"
+  "ai-tools/",
+  "*.log",
+  "*.bat"
 ]
 
 tree_dirs: [
