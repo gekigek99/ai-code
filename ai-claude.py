@@ -219,7 +219,7 @@ def export_md_file(data, filename):
     filepath = os.path.join(output_dir, filename)
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(f"{data}")
-    print(f"Saved to: {filepath}")
+    print(f"Saved to: {rel_path(filepath)}")
 
 
 def write_or_warn_from_claude_output(output_text):
@@ -365,17 +365,19 @@ def has_uncommitted_changes():
     return changes_count != 0
 
 
+def rel_path(abs_path) -> str:
+    """Convert absolute path to relative path from current directory"""
+    rel_path = os.path.relpath(abs_path).replace('\\', '/')
+    # Ensure it starts with ./
+    if not rel_path.startswith('./'):
+        rel_path = './' + rel_path
+    return rel_path
+
 def main():
     load_dotenv(dotenv_path=os.path.join(script_dir, ".env"))
     run_claude = '-ai' in sys.argv
     run_readlast = '-readlast' in sys.argv
     force = '-f' in sys.argv
-
-    # Check for uncommitted git changes
-    if not force and has_uncommitted_changes():
-        print("ERROR: You have uncommitted changes in your git repository.")
-        print("Please commit or stash your changes before running this script.")
-        sys.exit(1)
 
     if run_readlast:
         print(f"Applying files from last Claude response ({output_dir}/clauderesponse.md)...")
@@ -395,12 +397,7 @@ def main():
     source_content = read_files(gather_source_files(SOURCE_DIRS))
     data_files = ""
     for path, content in source_content.items():
-        # Convert absolute path to relative path from current directory
-        rel_path = os.path.relpath(path).replace('\\', '/')
-        # Ensure it starts with ./
-        if not rel_path.startswith('./'):
-            rel_path = './' + rel_path
-        data_files += f"\n--- {rel_path} ---\n{content}\n"
+        data_files += f"\n--- {rel_path(path)} ---\n{content}\n"
 
     print(f"Input tokens [ESTIMATED]: {len(PROMPT) + len(tree_dirs) + len(data_files) // 4}")
 
@@ -408,6 +405,12 @@ def main():
         # Save the full prompt to output directory
         export_md_file("\n".join([SYSTEM, PROMPT, tree_dirs, data_files]), "userfullprompt.md")
         return
+    
+    # Check for uncommitted git changes
+    if not force and has_uncommitted_changes():
+        print("ERROR: You have uncommitted changes in your git repository.")
+        print("Please commit or stash your changes before running this script.")
+        sys.exit(1)
 
     client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
     print("Sending request to Claude...")
