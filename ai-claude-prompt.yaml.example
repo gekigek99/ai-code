@@ -4,7 +4,7 @@ source_dirs: [
 
 exclude_patterns: [
   ".git*",
-  "ai-tools/",
+  "ai-code/",
   "*.log",
   "*.bat"
 ]
