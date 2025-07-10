@@ -7,6 +7,8 @@ import subprocess
 import yaml
 import fnmatch
 
+# python ./ai-code/ai-claude.py -ai
+
 # Load configuration from YAML
 with open(os.path.join(os.path.dirname(__file__), "ai-claude-prompt.yaml")) as f:
     config = yaml.safe_load(f)
