@@ -1,4 +1,5 @@
 import os
+import datetime
 import sys
 import re
 from anthropic import Anthropic
@@ -10,9 +11,11 @@ import fnmatch
 # python ./ai-code/ai-claude.py -ai
 
 # Load configuration from YAML
-with open(os.path.join(os.path.dirname(__file__), "ai-claude-prompt.yaml")) as f:
-    config = yaml.safe_load(f)
+def load_config():
+    with open(os.path.join(os.path.dirname(__file__), "ai-claude-prompt.yaml")) as f:
+        return yaml.safe_load(f)
 
+config = load_config()
 SOURCE_DIRS = config.get("source_dirs", ["."])
 TREE_DIRS = config.get("tree_dirs") or SOURCE_DIRS
 EXCLUDE_PATTERNS = config.get("exclude_patterns", [])
@@ -223,6 +226,16 @@ def export_md_file(data, filename):
         f.write(f"{data}")
     print(f"Saved to: {rel_path(filepath)}")
 
+# Log file for prompts
+def log_prompt(content):
+    """Append the given prompt content to the log file with timestamp."""
+    log_path = os.path.join(output_dir, 'prompt.log')
+    timestamp = datetime.datetime.now().isoformat()
+    try:
+        with open(log_path, 'a', encoding='utf-8') as log_file:
+            log_file.write(f"\n=== Prompt logged at {timestamp} ===\n" + content + "\n")
+    except Exception as e:
+        print(f"Warning: Could not write to log file: {e}")
 
 def write_or_warn_from_claude_output(output_text):
     """Process Claude's response and write files."""
@@ -402,7 +415,7 @@ def main():
         data_files += f"\n--- {rel_path(path)} ---\n{content}\n"
 
     print(f"Input tokens [ESTIMATED]: {len(PROMPT) + len(tree_dirs) + len(data_files) // 4}")
-
+    
     if not run_claude:
         # Save the full prompt to output directory
         export_md_file("\n".join([SYSTEM, PROMPT, tree_dirs, data_files]), "userfullprompt.md")
@@ -516,6 +529,9 @@ def main():
         write_or_warn_from_claude_output(data_response)
     else:
         print("\nNo response received from Claude.")
+    
+    # log prompt for history tracking
+    log_prompt(PROMPT)
 
 
 if __name__ == "__main__":
