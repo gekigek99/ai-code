@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 import subprocess
 import yaml
 import fnmatch
+import fitz
 
 # python ./ai-code/ai-claude.py -ai
 
@@ -187,7 +188,102 @@ def gather_source_files(dirs):
     return sorted(list(all_files))
 
 
-def is_binary_file(path):
+def is_pdf_file(path):
+    """Check if a file is a PDF based on extension and optionally file header."""
+    # Check extension first for performance
+    if not path.lower().endswith('.pdf'):
+        return False
+    
+    # Optionally verify PDF header for extra safety
+    try:
+        with open(path, 'rb') as f:
+            header = f.read(5)
+            return header == b'%PDF-'
+    except Exception:
+        # If we can't read the file, assume it's not a valid PDF
+        return False
+
+
+def extract_text_from_pdf(path):
+    """
+    Extract text content from a PDF file using PyMuPDF.
+    
+    Returns a string containing all extracted text, or an error message if extraction fails.
+    """    
+    try:
+        # Open the PDF document
+        pdf_document = fitz.open(path)
+        
+        # Extract text from all pages
+        text_content = []
+        
+        # Add PDF metadata as header comment
+        text_content.append(f"[PDF Document: {os.path.basename(path)}]")
+        text_content.append(f"[Pages: {pdf_document.page_count}]")
+        
+        # Extract metadata if available
+        metadata = pdf_document.metadata
+        if metadata:
+            if metadata.get('title'):
+                text_content.append(f"[Title: {metadata['title']}]")
+            if metadata.get('author'):
+                text_content.append(f"[Author: {metadata['author']}]")
+        
+        text_content.append("[Content:]")
+        text_content.append("")
+        
+        # Extract text from each page
+        for page_num in range(pdf_document.page_count):
+            page = pdf_document[page_num]
+            
+            # Add page separator for multi-page documents
+            if pdf_document.page_count > 1:
+                text_content.append(f"\n└─ Page {page_num + 1}")
+            
+            # Extract text from the page
+            page_text = page.get_text()
+            
+            # Clean up the text: remove excessive whitespace but preserve structure
+            page_text = re.sub(r'\n{3,}', '\n\n', page_text)  # Limit consecutive newlines
+            page_text = page_text.strip()
+            
+            if page_text:
+                text_content.append(page_text)
+            else:
+                text_content.append("[No text content on this page]")
+        
+        # Close the document
+        pdf_document.close()
+        
+        # Join all content
+        full_text = '\n'.join(text_content)
+        
+        # If no meaningful text was extracted, indicate this
+        if not any(line.strip() and not line.startswith('[') for line in text_content):
+            return "[PDF contains no extractable text content - may be scanned/image-based]"
+        
+        return full_text
+        
+    except Exception as e:
+        # Return detailed error information for debugging
+        return f"[Error extracting PDF text: {type(e).__name__}: {str(e)}]"
+
+
+def is_binary_file(path, include_pdfs=False):
+    """
+    Check if a file is binary (non-text).
+    
+    Args:
+        path: File path to check
+        include_pdfs: If True and PDF support is enabled, PDFs are not considered binary
+    
+    Returns:
+        True if file is binary, False if it's text or (when enabled) a PDF
+    """
+    # If PDF support is requested and this is a PDF, it's not binary for our purposes
+    if include_pdfs and is_pdf_file(path):
+        return False
+    
     try:
         with open(path, 'rb') as f:
             chunk = f.read(1024)
@@ -198,24 +294,49 @@ def is_binary_file(path):
         return True  # treat as binary if unreadable
 
 
-def read_files(file_paths):
+def read_files(file_paths, read_pdfs=False):
+    """
+    Read contents of files, with optional PDF text extraction.
+    
+    Args:
+        file_paths: List of file paths to read
+        read_pdfs: If True, extract text from PDF files
+    
+    Returns:
+        Dictionary mapping file paths to their contents
+    """
     print("Reading files...")
+    
     contents = {}
+    pdf_count = 0
+    
     for path in file_paths:
         if not os.path.isfile(path):
             print(f"Skipped: {path} (not found)")
             continue
 
-        if is_binary_file(path):
+        # Check if this is a PDF and we should read it
+        if read_pdfs and is_pdf_file(path):
+            pdf_count += 1
+            contents[path] = extract_text_from_pdf(path)
+            continue
+
+        # Check if file is binary
+        if is_binary_file(path, include_pdfs=read_pdfs):
             contents[path] = "[binary content]"
             continue
 
+        # Read as regular text file
         try:
             with open(path, 'r', encoding='utf-8', errors='ignore') as f:
                 contents[path] = f.read()
         except Exception as e:
             print(f"Error reading {path}: {e}")
             contents[path] = f"[Error reading file: {e}]"
+    
+    if read_pdfs and pdf_count > 0:
+        print(f"Extracted text from {pdf_count} PDF file(s)")
+    
     return contents
 
 
@@ -242,12 +363,12 @@ def write_or_warn_from_claude_output(output_text):
     # Save the raw response to output directory
     export_md_file(output_text, "clauderesponse.md")
 
-    # Match "+++ filename +++" or "+++ filename [TAG] +++"
+    # Match "\+\+\+ filename \+\+\+" or "\+\+\+ filename [TAG] \+\+\+"
     file_pattern = re.compile(
-        r'^\+\+\+\s*'            # "+++ " (leading)
+        r'^\+\+\+\s*'            # "\+\+\+ " (leading)
         r'(.+?)'                 #   group(1)=filename
         r'(?:\s*\[([A-Z]+)\])?'  #   opt group(2)=TAG like UPDATE or DELETE
-        r'\s*\+\+\+$',           # " +++" (trailing)
+        r'\s*\+\+\+$',           # " \+\+\+" (trailing)
         re.MULTILINE
     )
     parts = file_pattern.split(output_text)
@@ -271,8 +392,8 @@ def write_or_warn_from_claude_output(output_text):
                 print(f"File not found (for deletion): {file_name}")
             continue
 
-        # Extract code from ```…``` if present
-        m = re.search(r'```(?:[^\n]*\n)?(.*?)```', content_block, re.DOTALL)
+        # Extract code
+        m = re.search(r'\`\`\`(?:[^\n]*\n)?(.*?)\`\`\`', content_block, re.DOTALL)
         content = m.group(1).rstrip() if m else content_block.strip()
 
         # Ensure directory exists (or use '.' for top-level files)
@@ -390,10 +511,13 @@ def rel_path(abs_path) -> str:
 
 def main():
     load_dotenv(dotenv_path=os.path.join(script_dir, ".env"))
+    
+    # Parse command line flags
     run_claude = '-ai' in sys.argv
     run_readlast = '-readlast' in sys.argv
     force = '-f' in sys.argv
-
+    read_pdfs = '-pdf' in sys.argv  # New flag for PDF support
+    
     if run_readlast:
         print(f"Applying files from last Claude response ({output_dir}/clauderesponse.md)...")
         md_path = os.path.join(output_dir, "clauderesponse.md")
@@ -408,8 +532,11 @@ def main():
             print("Empty clauderesponse file.")
         return
 
+    # Build directory tree and read files with PDF support if enabled
     tree_dirs = get_directory_tree(TREE_DIRS)
-    source_content = read_files(gather_source_files(SOURCE_DIRS))
+    source_content = read_files(gather_source_files(SOURCE_DIRS), read_pdfs=read_pdfs)
+    
+    # Format file contents for prompt
     data_files = ""
     for path, content in source_content.items():
         data_files += f"\n--- {rel_path(path)} ---\n{content}\n"
