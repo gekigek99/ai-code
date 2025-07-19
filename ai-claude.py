@@ -15,7 +15,7 @@ import fitz
 
 # Load configuration from YAML
 def load_config():
-    with open(os.path.join(os.path.dirname(__file__), "ai-claude-prompt.yaml")) as f:
+    with open(os.path.join(os.path.dirname(__file__), "ai-claude-prompt.yaml"), "r", encoding='utf-8') as f:
         return yaml.safe_load(f)
 
 config = load_config()
@@ -289,7 +289,7 @@ def is_binary_file(path, include_pdfs=False):
         return False
     
     try:
-        with open(path, 'rb') as f:
+        with open(path, 'rb', encoding='utf-8') as f:
             chunk = f.read(1024)
             if b'\0' in chunk:
                 return True
