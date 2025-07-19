@@ -2,6 +2,8 @@ import os
 import datetime
 import sys
 import re
+import base64
+import mimetypes
 from anthropic import Anthropic
 from dotenv import load_dotenv
 import subprocess
@@ -209,6 +211,8 @@ def extract_text_from_pdf(path):
     Extract text content from a PDF file using PyMuPDF.
     
     Returns a string containing all extracted text, or an error message if extraction fails.
+
+    We are extracting PDF text, for full PDF support use the anthropic PDF support (https://docs.anthropic.com/en/docs/build-with-claude/pdf-support). Enable citations for pdf image analysis.
     """    
     try:
         # Open the PDF document
@@ -338,6 +342,218 @@ def read_files(file_paths, read_pdfs=False):
         print(f"Extracted text from {pdf_count} PDF file(s)")
     
     return contents
+
+
+def parse_image_arguments():
+    """
+    Parse command line arguments to extract image paths from -img flags.
+    
+    Returns:
+        List of image paths specified via -img flags
+    """
+    image_paths = []
+    
+    # Look for -img flags followed by paths
+    i = 0
+    while i < len(sys.argv):
+        if sys.argv[i] == '-img' and i + 1 < len(sys.argv):
+            # Next argument should be the image path
+            img_path = sys.argv[i + 1]
+            # Convert to absolute path for consistency
+            abs_img_path = os.path.abspath(img_path)
+            image_paths.append(abs_img_path)
+            i += 2  # Skip both -img and the path
+        else:
+            i += 1
+    
+    return image_paths
+
+
+def determine_image_media_type(file_path):
+    """
+    Determine the MIME type of an image file based on its extension and content.
+    
+    Args:
+        file_path: Path to the image file
+        
+    Returns:
+        String containing the MIME type (e.g., 'image/jpeg', 'image/png')
+        
+    Raises:
+        ValueError: If the file is not a supported image type
+    """
+    # First check the file extension
+    mime_type, _ = mimetypes.guess_type(file_path)
+    
+    # Validate it's an image type and is supported by Claude
+    supported_types = {
+        'image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'
+    }
+    
+    if mime_type and mime_type.lower() in supported_types:
+        return mime_type.lower()
+    
+    # If mimetypes couldn't determine it, try based on extension
+    ext = os.path.splitext(file_path)[1].lower()
+    extension_map = {
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg', 
+        '.png': 'image/png',
+        '.gif': 'image/gif',
+        '.webp': 'image/webp'
+    }
+    
+    if ext in extension_map:
+        return extension_map[ext]
+    
+    # Try to read file header to determine type
+    try:
+        with open(file_path, 'rb') as f:
+            header = f.read(16)
+            
+        # Check common image headers
+        if header.startswith(b'\xff\xd8\xff'):
+            return 'image/jpeg'
+        elif header.startswith(b'\x89PNG\r\n\x1a\n'):
+            return 'image/png'
+        elif header.startswith(b'GIF87a') or header.startswith(b'GIF89a'):
+            return 'image/gif'
+        elif header.startswith(b'RIFF') and b'WEBP' in header:
+            return 'image/webp'
+    except Exception:
+        pass
+    
+    raise ValueError(f"Unsupported or unrecognized image type for file: {file_path}")
+
+
+def process_images(image_paths):
+    """
+    Process image files by reading, validating, and encoding them for Claude API.
+    
+    Args:
+        image_paths: List of file paths to process
+        
+    Returns:
+        List of dictionaries containing processed image data with format:
+        {
+            'type': 'image',
+            'source': {
+                'type': 'base64',
+                'media_type': 'image/jpeg',
+                'data': 'base64_encoded_data'
+            },
+            'path': '/path/to/original/file'  # Added for debugging/logging
+        }
+    """
+    processed_images = []
+    
+    if not image_paths:
+        return processed_images
+        
+    print(f"\nProcessing {len(image_paths)} image(s)...")
+    
+    for img_path in image_paths:
+        try:
+            # Validate that the file exists
+            if not os.path.isfile(img_path):
+                print(f"ERROR: Image file not found: {img_path}")
+                continue
+                
+            # Determine the media type
+            try:
+                media_type = determine_image_media_type(img_path)
+            except ValueError as e:
+                print(f"ERROR: {e}")
+                continue
+                
+            # Read and encode the image file
+            try:
+                with open(img_path, 'rb') as f:
+                    image_data = f.read()
+                    
+                # Validate file size (Claude has limits, typically around 5MB per image)
+                file_size_mb = len(image_data) / (1024 * 1024)
+                if file_size_mb > 5:
+                    print(f"WARNING: Image {img_path} is {file_size_mb:.1f}MB, which may exceed Claude's size limits")
+                    
+                # Encode to base64
+                base64_data = base64.b64encode(image_data).decode('utf-8')
+                
+                # Create the structure expected by Claude API
+                image_content = {
+                    'type': 'image',
+                    'source': {
+                        'type': 'base64',
+                        'media_type': media_type,
+                        'data': base64_data
+                    },
+                    'path': img_path  # Keep for logging/debugging
+                }
+                
+                processed_images.append(image_content)
+                print(f"✓ Processed: {rel_path(img_path)} ({media_type}, {file_size_mb:.1f}MB)")
+                
+            except Exception as e:
+                print(f"ERROR: Failed to read/encode image {img_path}: {e}")
+                continue
+                
+        except Exception as e:
+            print(f"ERROR: Unexpected error processing image {img_path}: {e}")
+            continue
+    
+    if processed_images:
+        print(f"Successfully processed {len(processed_images)} image(s)")
+    else:
+        print("No images were successfully processed")
+        
+    return processed_images
+
+
+def estimate_image_tokens(processed_images):
+    """
+    Estimate the token count for images.
+    
+    Based on Claude documentation, images typically consume ~1600 tokens each,
+    but this can vary significantly based on image size, complexity, and format.
+    This provides a rough estimate for planning purposes.
+    An other way to calculate them: tokens = (witdh px * height px)/750
+    
+    Args:
+        processed_images: List of processed image dictionaries
+        
+    Returns:
+        Integer estimate of tokens consumed by images
+    """
+    if not processed_images:
+        return 0
+        
+    # Base estimate per image - Claude documentation suggests ~1600 tokens
+    # but this can vary from 85 to 1600+ depending on image characteristics
+    base_tokens_per_image = 1200  # Conservative middle estimate
+    
+    total_tokens = 0
+    
+    for img in processed_images:
+        # Get the base64 data length as a rough proxy for image complexity
+        try:
+            data_length = len(img['source']['data'])
+            
+            # Adjust estimate based on data size
+            # Larger base64 data usually means more complex/higher resolution images
+            if data_length > 500000:  # Large image
+                tokens = 1600
+            elif data_length > 200000:  # Medium image  
+                tokens = 1200
+            else:  # Small image
+                tokens = 800
+                
+            total_tokens += tokens
+            
+        except KeyError:
+            # Fallback to base estimate if we can't access the data
+            total_tokens += base_tokens_per_image
+    
+    return total_tokens
 
 
 def export_md_file(data, filename):
@@ -518,6 +734,9 @@ def main():
     force = '-f' in sys.argv
     read_pdfs = '-pdf' in sys.argv  # New flag for PDF support
     
+    # Parse image paths from command line arguments
+    image_paths = parse_image_arguments()
+    
     if run_readlast:
         print(f"Applying files from last Claude response ({output_dir}/clauderesponse.md)...")
         md_path = os.path.join(output_dir, "clauderesponse.md")
@@ -536,12 +755,23 @@ def main():
     tree_dirs = get_directory_tree(TREE_DIRS)
     source_content = read_files(gather_source_files(SOURCE_DIRS), read_pdfs=read_pdfs)
     
+    # Process images if any were specified
+    processed_images = process_images(image_paths) if image_paths else []
+    
     # Format file contents for prompt
     data_files = ""
     for path, content in source_content.items():
         data_files += f"\n--- {rel_path(path)} ---\n{content}\n"
 
-    print(f"Input tokens [ESTIMATED]: {len(PROMPT) + len(tree_dirs) + len(data_files) // 4}")
+    # Calculate token estimates
+    text_tokens = len(PROMPT) + len(tree_dirs) + len(data_files) // 4
+    image_tokens = estimate_image_tokens(processed_images)
+    total_tokens = text_tokens + image_tokens
+    
+    print(f"Input tokens [ESTIMATED]: {total_tokens}")
+    if image_tokens > 0:
+        print(f"  - Text tokens: {text_tokens}")
+        print(f"  - Image tokens: {image_tokens} ({len(processed_images)} image(s))")
     
     if not run_claude:
         # Save the full prompt to output directory
@@ -557,6 +787,23 @@ def main():
     client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
     print("Sending request to Claude...")
 
+    # Build the message content array with images and text
+    message_content = []
+    
+    # Add images first (recommended order for Claude API)
+    for img in processed_images:
+        message_content.append({
+            'type': 'image',
+            'source': img['source']  # Contains type, media_type, and data
+        })
+    
+    # Add text content
+    message_content.extend([
+        {"type": "text", "text": PROMPT},
+        {"type": "text", "text": f"Directory tree structure: {tree_dirs}"},
+        {"type": "text", "text": data_files}
+    ])
+
     # Enable streaming to avoid the 10-minute non-streaming timeout
     response = client.messages.create(
         model=os.getenv("ANTHROPIC_CLAUDE_MODEL"),
@@ -564,9 +811,7 @@ def main():
         temperature=1,
         system=SYSTEM,
         messages=[
-            {"role": "user", "content": [{"type": "text", "text": PROMPT}]},
-            {"role": "user", "content": [{"type": "text", "text": f"Directory tree structure: {tree_dirs}"}]},
-            {"role": "user", "content": [{"type": "text", "text": data_files}]}
+            {"role": "user", "content": message_content}
         ],
         tools=[],
         thinking={
