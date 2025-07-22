@@ -5,7 +5,6 @@ import re
 import base64
 import mimetypes
 from anthropic import Anthropic
-from dotenv import load_dotenv
 import subprocess
 import yaml
 import fnmatch
@@ -19,13 +18,13 @@ def load_config():
         return yaml.safe_load(f)
 
 config = load_config()
+ANTHROPIC = config.get("ANTHROPIC", {})
 SOURCE_DIRS = config.get("source_dirs", ["."])
 TREE_DIRS = config.get("tree_dirs") or SOURCE_DIRS
 EXCLUDE_PATTERNS = config.get("exclude_patterns", [])
 SYSTEM = config.get("system", "")
 PROMPT = config.get("prompt", "")
 
-ANTHROPIC = config.get("ANTHROPIC", {})
 
 script_path = os.path.abspath(__file__)
 script_dir = os.path.dirname(script_path)
@@ -728,8 +727,6 @@ def rel_path(abs_path) -> str:
     return rel_path
 
 def main():
-    load_dotenv(dotenv_path=os.path.join(script_dir, ".env"))
-    
     # Parse command line flags
     run_claude = '-ai' in sys.argv
     run_readlast = '-readlast' in sys.argv
