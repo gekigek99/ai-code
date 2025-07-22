@@ -290,12 +290,12 @@ def is_binary_file(path, include_pdfs=False):
         return False
     
     try:
-        with open(path, 'rb', encoding='utf-8') as f:
+        with open(path, 'rb') as f:
             chunk = f.read(1024)
             if b'\0' in chunk:
                 return True
         return False
-    except Exception:
+    except Exception as e:
         return True  # treat as binary if unreadable
 
 
@@ -333,7 +333,7 @@ def read_files(file_paths, read_pdfs=False):
 
         # Read as regular text file
         try:
-            with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+            with open(path, 'r', encoding='utf-8') as f:
                 contents[path] = f.read()
         except Exception as e:
             print(f"Error reading {path}: {e}")
