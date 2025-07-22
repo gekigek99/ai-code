@@ -25,6 +25,8 @@ EXCLUDE_PATTERNS = config.get("exclude_patterns", [])
 SYSTEM = config.get("system", "")
 PROMPT = config.get("prompt", "")
 
+ANTHROPIC = config.get("ANTHROPIC", {})
+
 script_path = os.path.abspath(__file__)
 script_dir = os.path.dirname(script_path)
 script_dir_name = os.path.basename(script_dir)
@@ -784,7 +786,7 @@ def main():
         print("Please commit or stash your changes before running this script.")
         sys.exit(1)
 
-    client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    client = Anthropic(api_key=ANTHROPIC["API_KEY"])
     print("Sending request to Claude...")
 
     # Build the message content array with images and text
@@ -806,8 +808,8 @@ def main():
 
     # Enable streaming to avoid the 10-minute non-streaming timeout
     response = client.messages.create(
-        model=os.getenv("ANTHROPIC_CLAUDE_MODEL"),
-        max_tokens=int(os.getenv("ANTHROPIC_MAX_TOKENS")),
+        model=ANTHROPIC["CLAUDE_MODEL"],
+        max_tokens=int(ANTHROPIC["MAX_TOKENS"]),
         temperature=1,
         system=SYSTEM,
         messages=[
@@ -816,7 +818,7 @@ def main():
         tools=[],
         thinking={
             "type": "enabled",
-            "budget_tokens": int(os.getenv("ANTHROPIC_MAX_TOKENS_THINK")),
+            "budget_tokens": int(ANTHROPIC["MAX_TOKENS_THINK"]),
         },
         stream=True
     )

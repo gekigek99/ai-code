@@ -1,3 +1,14 @@
+ANTHROPIC:
+  API_KEY: sk-ant-api03-oTOWU6M_oxsJvVF__EXAMPLE__WuP2Oz8YpEwPZbA-hEqq44ff
+  # key name: 
+
+  MAX_TOKENS: 32000
+  MAX_TOKENS_THINK: 3000
+
+  CLAUDE_MODEL: claude-opus-4-20250514
+  # claude-sonnet-4-20250514
+  # claude-opus-4-20250514
+
 source_dirs: [
   "."
 ]
