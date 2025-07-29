@@ -772,19 +772,11 @@ def main():
         print(f"  - Text tokens: {text_tokens}")
         print(f"  - Image tokens: {image_tokens} ({len(processed_images)} image(s))")
     
-    if not run_claude:
-        # Save the full prompt to output directory
-        export_md_file("\n".join([SYSTEM, PROMPT, tree_dirs, data_files]), "userfullprompt.md")
-        return
-    
     # Check for uncommitted git changes
     if not force and has_uncommitted_changes():
         print("ERROR: You have uncommitted changes in your git repository.")
         print("Please commit or stash your changes before running this script.")
         sys.exit(1)
-
-    client = Anthropic(api_key=ANTHROPIC["API_KEY"])
-    print("Sending request to Claude...")
 
     # Build the message content array with images and text
     message_content = []
@@ -799,9 +791,23 @@ def main():
     # Add text content
     message_content.extend([
         {"type": "text", "text": PROMPT},
-        {"type": "text", "text": f"Directory tree structure: {tree_dirs}"},
-        {"type": "text", "text": data_files}
+        {"type": "text", "text": f"Directory tree structure: {tree_dirs}"}
     ])
+
+    if data_files != "":
+        message_content.extend([
+            {"type": "text", "text": data_files}
+        ])
+    
+    export_md_file("\n".join([SYSTEM, PROMPT, tree_dirs, data_files]), "userfullprompt.md")
+    export_md_file(message_content, "message_content.md")
+    
+    if not run_claude:
+        print("Not executing AI request...")
+        return
+
+    client = Anthropic(api_key=ANTHROPIC["API_KEY"])
+    print("Sending request to Claude...")
 
     # Enable streaming to avoid the 10-minute non-streaming timeout
     response = client.messages.create(
