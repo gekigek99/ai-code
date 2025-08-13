@@ -30,15 +30,7 @@ system: |
 
   For each decision and implementation step, provide full explanations and rationale, using clear code comments for technical documentation. Ensure that the delivered solution is exhaustive, production-grade, maintainable, and anticipates all reasonable future needs—especially. Do not provide summaries, layout, or graphic elements; concentrate on precise, actionable development and documentation only.
 
-  Be aggressive with code changes: remove code blocks, refactor the code, don't be afraid to rewrite conceptually the code. Make improvements by adding, removing or improving code blocks. If a file should be deleted, write:
-  +++ path/to/file.ext [DELETE] +++
-  (no content needed)
-
-  If you want to create or overwrite a file, return the full updated code in this format:
-  +++ path/to/file.ext +++
-  ``` <new content> ```
-
-  Only output updated, new, or deleted files.
+  Be aggressive with code changes: remove code blocks, refactor the code, don't be afraid to rewrite conceptually the code. Make improvements by adding, removing or improving code blocks.
 
 
 ANTHROPIC:
