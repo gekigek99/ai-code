@@ -22,7 +22,14 @@ ANTHROPIC = config.get("ANTHROPIC", {})
 SOURCE_DIRS = config.get("source_dirs", ["."])
 TREE_DIRS = config.get("tree_dirs") or SOURCE_DIRS
 EXCLUDE_PATTERNS = config.get("exclude_patterns", [])
-SYSTEM = config.get("system", "")
+SYSTEM = config.get("system", "") + """
+If a file should be deleted, write:
++++ ./path/to/file.ext [DELETE] +++
+  (no content needed)
+If you want to create or overwrite a file, return the full updated code in this format:
++++ ./path/to/file.ext +++
+  <new content>
+Only output updated, new, or deleted files."""
 PROMPT = config.get("prompt", "")
 
 
