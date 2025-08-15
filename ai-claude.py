@@ -859,7 +859,7 @@ def main():
                         # Regular content from Claude
                         chunk = event.delta.text
                         print(chunk, end="", flush=True)
-                        data_response += chunk
+                        data_response += chunk # TODO: save data receive until this point into claude_response_error for when the communication stops working
                 else:
                     # Fallback for unexpected delta structure
                     print(f"\n[DEBUG: Unexpected delta structure in {event.type}]")
