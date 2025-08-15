@@ -738,7 +738,7 @@ def main():
     run_claude = '-ai' in sys.argv
     run_readlast = '-readlast' in sys.argv
     force = '-f' in sys.argv
-    read_pdfs = '-pdf' in sys.argv  # New flag for PDF support
+    read_pdfs = '-pdf' in sys.argv
     
     # Parse image paths from command line arguments
     image_paths = parse_image_arguments()
