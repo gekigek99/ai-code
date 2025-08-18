@@ -633,10 +633,22 @@ def write_or_warn_from_claude_output(output_text):
     print(f"\nSummary: {files_written} file(s) written, {files_deleted} file(s) deleted.")
 
 
-def get_directory_tree(base_dirs):
+def get_directory_tree(base_dirs, source_files=None, colorize=True):
+    """
+    Build a directory tree for the given base_dirs. If `source_files` contains
+    a file path that is being printed, that line will be wrapped in ANSI green.
+    
+    base_dirs: list of directory paths to show
+    source_files: list of file paths to highlight (optional)
+    colorize: whether to use ANSI color codes (default True)
+    """
     print("Building directory tree...")
     project_root = os.path.abspath(os.getcwd())
     output_lines = []
+
+    source_files = source_files or []
+    # Normalize source files for robust comparisons (abs path + case normalization)
+    normalized_sources = set(os.path.normcase(os.path.abspath(p)) for p in source_files)
 
     def is_nested(child, parents):
         child = os.path.abspath(child)
@@ -658,19 +670,31 @@ def get_directory_tree(base_dirs):
         except Exception as e:
             output_lines.append(f"{prefix}[Error reading {path}]: {e}")
             return
-        
+
         # Filter out excluded entries
         filtered_entries = []
         for entry in entries:
             full_path = os.path.join(path, entry)
             if not is_excluded(full_path, base_dir or path):
                 filtered_entries.append(entry)
-        
+
         for i, entry in enumerate(filtered_entries):
             full_path = os.path.join(path, entry)
             is_last = (i == len(filtered_entries) - 1)
             connector = "└── " if is_last else "├── "
-            output_lines.append(f"{prefix}{connector}{entry}")
+
+            # Normalize the current entry path for comparison
+            full_norm = os.path.normcase(os.path.abspath(full_path))
+            is_marked = full_norm in normalized_sources
+
+            entry_text = entry
+            # Colorize the entry text if it's in source_files (colorize can be disabled)
+            if colorize and is_marked:
+                entry_text = f"\033[32m{entry_text}\033[0m"  # green + reset
+
+            output_lines.append(f"{prefix}{connector}{entry_text}")
+
+            # Recurse into directories (directories are not specially colored unless their path is in source_files)
             if os.path.isdir(full_path):
                 extension = "    " if is_last else "│   "
                 walk_dir(full_path, prefix + extension, base_dir or path)
@@ -758,8 +782,9 @@ def main():
         return
 
     # Build directory tree and read files with PDF support if enabled
-    tree_dirs = get_directory_tree(TREE_DIRS)
-    source_content = read_files(gather_source_files(SOURCE_DIRS), read_pdfs=read_pdfs)
+    souce_files = gather_source_files(SOURCE_DIRS)
+    tree_dirs = get_directory_tree(TREE_DIRS, souce_files)
+    source_content = read_files(souce_files, read_pdfs=read_pdfs)
     
     # Process images if any were specified
     processed_images = process_images(image_paths) if image_paths else []
