@@ -19,8 +19,8 @@ def load_config():
 
 config = load_config()
 ANTHROPIC = config.get("ANTHROPIC", {})
-SOURCE_DIRS = config.get("source_dirs", ["."])
-TREE_DIRS = config.get("tree_dirs") or SOURCE_DIRS
+SOURCE = config.get("source", ["."])  # <- was source_dirs
+TREE_DIRS = config.get("tree_dirs") or SOURCE
 EXCLUDE_PATTERNS = config.get("exclude_patterns", [])
 SYSTEM = config.get("system", "") + """
 If a file should be deleted, write:
@@ -160,41 +160,43 @@ def is_excluded(path, base_dir=None):
     return False
 
 
-def gather_source_files(dirs):
-    print("\nGathering  source directories...")
+def gather_source_files(entries):
+    print("\nGathering source files...")
     all_files = set()
     
-    for d in dirs:
-        # Normalize directory path
-        base_dir = os.path.abspath(d)
-        print(f"Scanning: {base_dir}")
-        
-        # Walk through directory tree
-        for root, dirnames, filenames in os.walk(base_dir):
-            # Filter out excluded directories before descending
-            # Create a copy of dirnames to iterate over
-            dirs_to_check = dirnames[:]
-            dirnames.clear()  # Clear the original list
-            
-            for dirname in dirs_to_check:
-                dirpath = os.path.join(root, dirname)
-                if not is_excluded(dirpath, base_dir):
-                    dirnames.append(dirname)  # Add back non-excluded directories
-                else:
-                    # print(f"  Excluding directory: {os.path.relpath(dirpath, base_dir)}")
-                    continue
+    for entry in entries:
+        abs_entry = os.path.abspath(entry)
+        if not os.path.exists(abs_entry):
+            print(f"WARNING: Source entry not found: {entry}")
+            continue
 
-            # Check files
-            for filename in filenames:
-                filepath = os.path.join(root, filename)
-                
-                # Skip if excluded
-                if is_excluded(filepath, base_dir):
-                    # print(f"  Excluding file: {os.path.relpath(filepath, base_dir)}")
-                    continue
-                    
-                all_files.add(filepath)
-    
+        # If it's a file, just add it
+        if os.path.isfile(abs_entry):
+            if not is_excluded(abs_entry):
+                all_files.add(abs_entry)
+            else:
+                print(f"Excluding file: {entry}")
+            continue
+
+        # If it's a directory, walk it
+        if os.path.isdir(abs_entry):
+            print(f"Scanning directory: {abs_entry}")
+            for root, dirnames, filenames in os.walk(abs_entry):
+                # Filter directories
+                dirs_to_check = dirnames[:]
+                dirnames.clear()
+                for dirname in dirs_to_check:
+                    dirpath = os.path.join(root, dirname)
+                    if not is_excluded(dirpath, abs_entry):
+                        dirnames.append(dirname)
+                # Files
+                for filename in filenames:
+                    filepath = os.path.join(root, filename)
+                    if not is_excluded(filepath, abs_entry):
+                        all_files.add(filepath)
+        else:
+            print(f"Skipping unknown source entry: {entry}")
+
     return sorted(list(all_files))
 
 
@@ -782,9 +784,9 @@ def main():
         return
 
     # Build directory tree and read files with PDF support if enabled
-    souce_files = gather_source_files(SOURCE_DIRS)
-    tree_dirs = get_directory_tree(TREE_DIRS, souce_files)
-    source_content = read_files(souce_files, read_pdfs=read_pdfs)
+    source_files = gather_source_files(SOURCE)
+    tree_dirs = get_directory_tree(TREE_DIRS, source_files)
+    source_content = read_files(source_files, read_pdfs=read_pdfs)
     
     # Process images if any were specified
     processed_images = process_images(image_paths) if image_paths else []
