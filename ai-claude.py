@@ -738,7 +738,7 @@ def main():
     run_claude = '-ai' in sys.argv
     run_readlast = '-readlast' in sys.argv
     force = '-f' in sys.argv
-    read_pdfs = '-pdf' in sys.argv  # New flag for PDF support
+    read_pdfs = '-pdf' in sys.argv
     
     # Parse image paths from command line arguments
     image_paths = parse_image_arguments()
@@ -859,7 +859,7 @@ def main():
                         # Regular content from Claude
                         chunk = event.delta.text
                         print(chunk, end="", flush=True)
-                        data_response += chunk
+                        data_response += chunk # TODO: save data receive until this point into claude_response_error for when the communication stops working
                 else:
                     # Fallback for unexpected delta structure
                     print(f"\n[DEBUG: Unexpected delta structure in {event.type}]")
