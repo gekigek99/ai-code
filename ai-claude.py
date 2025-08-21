@@ -23,12 +23,19 @@ SOURCE = config.get("source", ["."])  # <- was source_dirs
 TREE_DIRS = config.get("tree_dirs") or SOURCE
 EXCLUDE_PATTERNS = config.get("exclude_patterns", [])
 SYSTEM = config.get("system", "") + """
+
+# --- file output patterns --- #
+
 If a file should be deleted, write:
 +++ ./path/to/file.ext [DELETE] +++
   (no content needed)
++++
+
 If you want to create or overwrite a file, return the full updated code in this format:
 +++ ./path/to/file.ext +++
   <new content>
++++
+
 Only output updated, new, or deleted files."""
 PROMPT = config.get("prompt", "")
 
@@ -585,26 +592,27 @@ def log_prompt(content):
         print(f"Warning: Could not write to log file: {e}")
 
 def write_or_warn_from_claude_output(output_text):
-    """Process Claude's response and write files."""
+    """Process Claude's response and write or delete files."""
     # Save the raw response to output directory
     export_md_file(output_text, "clauderesponse.md")
 
-    # Match "\+\+\+ filename \+\+\+" or "\+\+\+ filename [TAG] \+\+\+"
-    file_pattern = re.compile(
-        r'^\+\+\+\s*'            # "\+\+\+ " (leading)
-        r'(.+?)'                 #   group(1)=filename
-        r'(?:\s*\[([A-Z]+)\])?'  #   opt group(2)=TAG like UPDATE or DELETE
-        r'\s*\+\+\+$',           # " \+\+\+" (trailing)
-        re.MULTILINE
+    # Regex: match "+++ filename [TAG] +++" ... content ... "+++"
+    block_pattern = re.compile(
+        r'^\+\+\+\s*'              # opening +++
+        r'(.+?)'                   # group(1) = filename
+        r'(?:\s*\[([A-Z]+)\])?'    # optional group(2) = TAG (DELETE, UPDATE, etc.)
+        r'\s*\+\+\+\s*\n'          # end of header line
+        r'(.*?)'                   # group(3) = content (non-greedy)
+        r'^\+\+\+$',               # closing +++
+        re.MULTILINE | re.DOTALL
     )
-    parts = file_pattern.split(output_text)
+
+    matches = block_pattern.findall(output_text)
 
     files_written = 0
     files_deleted = 0
 
-    for i in range(1, len(parts), 3):
-        file_name, tag, content_block = parts[i], parts[i+1], parts[i+2]
-
+    for file_name, tag, content_block in matches:
         if tag == "DELETE":
             # Delete the file if it exists
             if os.path.exists(file_name):
@@ -618,7 +626,7 @@ def write_or_warn_from_claude_output(output_text):
                 print(f"File not found (for deletion): {file_name}")
             continue
 
-        # Extract code
+        # Extract code block if present
         m = re.search(r'\`\`\`(?:[^\n]*\n)?(.*?)\`\`\`', content_block, re.DOTALL)
         content = m.group(1).rstrip() if m else content_block.strip()
 
