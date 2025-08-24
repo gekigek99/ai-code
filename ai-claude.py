@@ -626,19 +626,19 @@ def write_or_warn_from_claude_output(output_text):
                 print(f"File not found (for deletion): {file_name}")
             continue
 
-        # Extract code block if present
-        m = re.search(r'\`\`\`(?:[^\n]*\n)?(.*?)\`\`\`', content_block, re.DOTALL)
-        content = m.group(1).rstrip() if m else content_block.strip()
+        content = content_block.strip()
 
         # Ensure directory exists (or use '.' for top-level files)
         target_dir = os.path.dirname(file_name) or '.'
         os.makedirs(target_dir, exist_ok=True)
 
-        # Write file
-        with open(file_name, 'w', encoding='utf-8') as f:
-            f.write(content + '\n')
-        print(f"File written: {file_name}")
-        files_written += 1
+        try:
+            with open(file_name, 'w', encoding='utf-8') as f:
+                f.write(content + '\n')
+            print(f"File written: {file_name}")
+            files_written += 1
+        except Exception as e:
+            print(f"Error writing {file_name}: {e}")
 
     print(f"\nSummary: {files_written} file(s) written, {files_deleted} file(s) deleted.")
 
