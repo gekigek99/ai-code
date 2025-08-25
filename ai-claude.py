@@ -874,7 +874,12 @@ def main():
     raw_data = []  # Store all raw event data
     
     print("\nClaude's response:")
-    
+
+    # Ensure clauderesponse-recv.md is empty before streaming
+    recv_path = os.path.join(output_dir, "clauderesponse-recv.md")
+    with open(recv_path, "w", encoding="utf-8") as f:
+        f.write("")
+
     for event in response:
         # Store raw event data
         raw_data.append({
@@ -884,7 +889,6 @@ def main():
         
         try:
             if event.type == "content_block_delta":
-                # Check if this is a thinking delta or regular content delta
                 if hasattr(event, 'delta') and hasattr(event.delta, 'type'):
                     if event.delta.type == 'thinking_delta':
                         # Thinking content (internal reasoning)
@@ -894,13 +898,16 @@ def main():
                         # Regular content from Claude
                         chunk = event.delta.text
                         print(chunk, end="", flush=True)
-                        data_response += chunk # TODO: save data receive until this point into claude_response_error for when the communication stops working
+                        data_response += chunk
+                        
+                        # Append chunk to clauderesponse-recv.md
+                        with open(recv_path, "a", encoding="utf-8") as f:
+                            f.write(chunk)
+
                 else:
-                    # Fallback for unexpected delta structure
                     print(f"\n[DEBUG: Unexpected delta structure in {event.type}]")
             
             elif event.type == "message_start":
-                # Message is starting
                 print(f"\n[Message Start Event Data]: {event}")
             
             elif event.type == "message_stop":
@@ -927,7 +934,6 @@ def main():
                 print(f"\n[DEBUG: Unhandled event type '{event.type}']")
                 
         except AttributeError as e:
-            # Handle unexpected event types gracefully
             print(f"\n[ERROR: AttributeError for event type '{event.type}': {e}]")
             print(f"[Event details: {event}]")
             continue
