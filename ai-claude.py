@@ -652,6 +652,7 @@ def get_directory_tree(base_dirs, source_files=None, colorize=True):
     source_files: list of file paths to highlight (optional)
     colorize: whether to use ANSI color codes (default True)
     """
+
     print("Building directory tree...")
     project_root = os.path.abspath(os.getcwd())
     output_lines = []
@@ -668,20 +669,18 @@ def get_directory_tree(base_dirs, source_files=None, colorize=True):
                 if os.path.commonpath([child, parent]) == parent and child != parent:
                     return True
             except ValueError:
-                # Paths on different drives on Windows
                 continue
         return False
 
     def walk_dir(path, prefix="", base_dir=None):
         if is_excluded(path, base_dir or path):
-            return  # Skip entire subtree
+            return
         try:
             entries = sorted(os.listdir(path))
         except Exception as e:
             output_lines.append(f"{prefix}[Error reading {path}]: {e}")
             return
 
-        # Filter out excluded entries
         filtered_entries = []
         for entry in entries:
             full_path = os.path.join(path, entry)
@@ -698,13 +697,23 @@ def get_directory_tree(base_dirs, source_files=None, colorize=True):
             is_marked = full_norm in normalized_sources
 
             entry_text = entry
-            # Colorize the entry text if it's in source_files (colorize can be disabled)
+
+            if os.path.isfile(full_path):
+                try:
+                    file_size = os.path.getsize(full_path)
+                    size_kb = file_size / 1024
+                    tokens = file_size // 4
+                    if is_marked:
+                        entry_text += f"{' '*(20-len(os.path.basename(full_path)))} [{size_kb:5.1f} KB | ~{tokens:5.0f} tokens]"
+                except Exception:
+                    entry_text += "  [? KB]"
+
             if colorize and is_marked:
-                entry_text = f"\033[32m{entry_text}\033[0m"  # green + reset
+                entry_text = f"\033[32m{entry_text}\033[0m"
 
             output_lines.append(f"{prefix}{connector}{entry_text}")
 
-            # Recurse into directories (directories are not specially colored unless their path is in source_files)
+            # Recurse into directories (directories are not colored)
             if os.path.isdir(full_path):
                 extension = "    " if is_last else "│   "
                 walk_dir(full_path, prefix + extension, base_dir or path)
