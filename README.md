@@ -32,31 +32,42 @@ git submodule add https://github.com/gekigek99/ai-code.git
 
 ## Configuration
 
-Create a .env file:
-
-```sh
-ANTHROPIC_API_KEY=your_key_here
-ANTHROPIC_CLAUDE_MODEL=claude-sonnet-4-20250514
-ANTHROPIC_MAX_TOKENS=20000
-ANTHROPIC_MAX_TOKENS_THINK=5000
-```
+Create ai-claude-prompt.yaml from the ai-claude-prompt.yaml.example:
 
 ## Edit ai-claude-prompt.yaml
 
 ```yaml
-source_dirs:
-  - .
+source: [
+  "."
+]
 
-exclude_patterns:
-  - ai-claude
-  - .git/
-  - __pycache__/
+exclude_patterns: [
+  "ai-claude/",
+  ".git*",
+  "__pycache__/"
+]
+
+tree_dirs: [
+  ".",
+]
+
+prompt: |
+  "Refactor and improve the code."
 
 system: |
   "AI assistant for code tasks"
 
-prompt: |
-  "Refactor and improve the code."
+ANTHROPIC:
+  API_KEY: sk-ant-api03-EXAMPLE-KpU7vgAA
+  # key name: test_api
+
+  MAX_TOKENS: 32000
+  MAX_TOKENS_THINK: 3000
+
+  CLAUDE_MODEL: claude-sonnet-4-20250514
+  # claude-sonnet-4-20250514
+  # claude-opus-4-20250514
+  # claude-opus-4-1-20250805
 ```
 
 ## Usage
@@ -73,14 +84,16 @@ prompt: |
 4. Reapply last response
 `python ai-claude.py -readlast`
 
+5. Share pdfs text content
+`python ai-claude.py -pdf`
+
+5. Share images
+`python ai-claude.py -img path/to/image1.ext -img path/to/image2.ext`
+
 ## Exclude Patterns
 
 Add glob patterns in exclude_patterns, e.g.: *.pyc, .env*, node_modules/.
 
-## Outputs
+---
 
-AI outputs use markers like:
-
-+++ path/to/file.py +++
-
-with optional [UPDATE] or [DELETE] tags.
+Remember to star the project on [GitHub](https://github.com/gekigek99/ai-code)!
