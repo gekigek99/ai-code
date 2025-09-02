@@ -72,21 +72,6 @@ class FileData:
     ai_data_converted_type: str
     ai_data_tokens: int
 
-    @classmethod
-    def get(
-        cls, 
-        files: List['FileData'], 
-        path: str
-    ) -> Optional['FileData']:
-        """
-        Search for a FileData in the list by absolute or relative path.
-        Returns the FileData if found, otherwise None.
-        """
-        for f in files:
-            if f.path_abs == path or f.path_rel == path:
-                return f
-        return None
-
 def is_excluded(path, base_dir=None):
     """Check if a path matches any exclude pattern."""
 
