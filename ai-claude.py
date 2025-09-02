@@ -9,6 +9,9 @@ import subprocess
 import yaml
 import fnmatch
 import fitz
+from typing import List, Dict, Any, Optional, Tuple
+from dataclasses import dataclass, field
+from PIL import Image
 
 # python ./ai-code/ai-claude.py -ai
 
@@ -19,10 +22,10 @@ def load_config():
 
 config = load_config()
 ANTHROPIC = config.get("ANTHROPIC", {})
-SOURCE = config.get("source", ["."])  # <- was source_dirs
+SOURCE = config.get("source")
 TREE_DIRS = config.get("tree_dirs") or SOURCE
-EXCLUDE_PATTERNS = config.get("exclude_patterns", [])
-SYSTEM = config.get("system", "") + """
+EXCLUDE_PATTERNS = config.get("exclude_patterns")
+SYSTEM = config.get("system") + """
 
 # --- file output patterns --- #
 
@@ -37,7 +40,7 @@ If you want to create or overwrite a file, return the full updated code in this 
 +++
 
 Only output updated, new, or deleted files."""
-PROMPT = config.get("prompt", "")
+PROMPT = config.get("prompt")
 
 
 script_path = os.path.abspath(__file__)
@@ -51,67 +54,66 @@ output_dir = os.path.join(script_dir, script_base_name)
 os.makedirs(output_dir, exist_ok=True)
 
 
-def normalize_path(path):
-    """Normalize path for consistent pattern matching."""
-    # Convert to absolute path and normalize separators
-    abs_path = os.path.abspath(path)
-    # Convert to forward slashes for consistent matching
-    return abs_path.replace('\\', '/')
+@dataclass
+class FileData:
+    file_type: str
+    path_abs: str
+    path_rel: str
+    extension: str
+    ai_share: bool
 
+    data: Any
+    data_type: str
+    data_size: int
+    media_type: str
 
-def normalize_pattern(pattern):
-    """Normalize pattern for consistent matching."""
-    # Convert backslashes to forward slashes and remove trailing slashes
-    pattern = pattern.replace('\\', '/')
-    # Keep track of whether it was a directory pattern
-    is_dir = pattern.endswith('/')
-    pattern = pattern.rstrip('/')
-    return pattern, is_dir
-
-
-def path_matches_pattern(path, pattern):
-    """Check if a path matches a specific pattern, supporting multi-level paths."""
-    # Normalize both for comparison
-    norm_path = path.replace('\\', '/')
-    norm_pattern, is_dir_pattern = normalize_pattern(pattern)
-    
-    # For multi-level patterns (containing /), check if the pattern appears in the path
-    if '/' in norm_pattern:
-        # Check if the pattern matches the end of the path or appears as a complete segment
-        path_parts = norm_path.split('/')
-        pattern_parts = norm_pattern.split('/')
-        
-        # Check all possible positions where the pattern could match
-        for i in range(len(path_parts) - len(pattern_parts) + 1):
-            # Check if pattern matches at this position
-            match = True
-            for j, pattern_part in enumerate(pattern_parts):
-                if not fnmatch.fnmatch(path_parts[i + j], pattern_part):
-                    match = False
-                    break
-            if match:
-                return True
-        return False
-    else:
-        # Single-level pattern - check against each path component
-        path_parts = norm_path.split('/')
-        for part in path_parts:
-            if fnmatch.fnmatch(part, norm_pattern):
-                return True
-        return False
-
+    ai_interpretable: bool
+    ai_data_converted: str
+    ai_data_converted_type: str
+    ai_data_tokens: int
 
 def is_excluded(path, base_dir=None):
     """Check if a path matches any exclude pattern."""
+
+    def path_matches_pattern(path, pattern):
+        """Check if a path matches a specific pattern, supporting multi-level paths."""
+        # Normalize both for comparison
+        norm_path = path.replace('\\', '/')
+        norm_pattern = pattern.replace('\\', '/').rstrip('/')
+        
+        # For multi-level patterns (containing /), check if the pattern appears in the path
+        if '/' in norm_pattern:
+            # Check if the pattern matches the end of the path or appears as a complete segment
+            path_parts = norm_path.split('/')
+            pattern_parts = norm_pattern.split('/')
+            
+            # Check all possible positions where the pattern could match
+            for i in range(len(path_parts) - len(pattern_parts) + 1):
+                # Check if pattern matches at this position
+                match = True
+                for j, pattern_part in enumerate(pattern_parts):
+                    if not fnmatch.fnmatch(path_parts[i + j], pattern_part):
+                        match = False
+                        break
+                if match:
+                    return True
+            return False
+        else:
+            # Single-level pattern - check against each path component
+            path_parts = norm_path.split('/')
+            for part in path_parts:
+                if fnmatch.fnmatch(part, norm_pattern):
+                    return True
+            return False
+
     # Normalize the path for matching
-    norm_path = normalize_path(path)
+    norm_path = os.path.abspath(path).replace('\\', '/')
     
     # Get the base name of the path (last component)
-    base_name = os.path.basename(path)
+    base_name = os.path.basename(path).replace('\\', '/')
     
     # If base_dir is provided, get relative path for matching
     if base_dir:
-        base_norm = normalize_path(base_dir)
         try:
             # Get relative path from base directory
             rel_path = os.path.relpath(path, base_dir).replace('\\', '/')
@@ -128,7 +130,9 @@ def is_excluded(path, base_dir=None):
     # Check each exclude pattern
     for pattern in EXCLUDE_PATTERNS:
         # Normalize the pattern
-        norm_pattern, is_dir_pattern = normalize_pattern(pattern)
+        pattern = pattern.replace('\\', '/')
+        is_dir_pattern = pattern.endswith('/')
+        norm_pattern = pattern.rstrip('/') 
         
         # Check for multi-level path patterns (containing /)
         if '/' in norm_pattern:
@@ -167,22 +171,123 @@ def is_excluded(path, base_dir=None):
     return False
 
 
-def gather_source_files(entries):
-    print("\nGathering source files...")
-    all_files = set()
+def add_source(files_to_ai: List[FileData], SOURCE, ai_shared_file_types=[]) -> List[FileData]:
+    """adds source"""
+
+    def extract_text_from_pdf(path):
+        """
+        Extract text content from a PDF file using PyMuPDF.
+        
+        Returns a string containing all extracted text, or an error message if extraction fails.
+
+        We are extracting PDF text, for full PDF support use the anthropic PDF support (https://docs.anthropic.com/en/docs/build-with-claude/pdf-support). Enable citations for pdf image analysis.
+        """    
+        try:
+            # Open the PDF document
+            pdf_document = fitz.open(path)
+            
+            # Extract text from all pages
+            text_content = []
+            
+            # Add PDF metadata as header comment
+            text_content.append(f"[PDF Document: {os.path.basename(path)}]")
+            text_content.append(f"[Pages: {pdf_document.page_count}]")
+            
+            # Extract metadata if available
+            metadata = pdf_document.metadata
+            if metadata:
+                if metadata.get('title'):
+                    text_content.append(f"[Title: {metadata['title']}]")
+                if metadata.get('author'):
+                    text_content.append(f"[Author: {metadata['author']}]")
+            
+            text_content.append("[Content:]")
+            text_content.append("")
+            
+            # Extract text from each page
+            for page_num in range(pdf_document.page_count):
+                page = pdf_document[page_num]
+                
+                # Add page separator for multi-page documents
+                if pdf_document.page_count > 1:
+                    text_content.append(f"\n└─ Page {page_num + 1}")
+                
+                # Extract text from the page
+                page_text = page.get_text()
+                
+                # Clean up the text: remove excessive whitespace but preserve structure
+                page_text = re.sub(r'\n{3,}', '\n\n', page_text)  # Limit consecutive newlines
+                page_text = page_text.strip()
+                
+                if page_text:
+                    text_content.append(page_text)
+                else:
+                    text_content.append("[No text content on this page]")
+            
+            # Close the document
+            pdf_document.close()
+            
+            # Join all content
+            full_text = '\n'.join(text_content)
+            
+            # If no meaningful text was extracted, indicate this
+            if not any(line.strip() and not line.startswith('[') for line in text_content):
+                return "[PDF contains no extractable text content - may be scanned/image-based]"
+            
+            return full_text
+            
+        except Exception as e:
+            # Return detailed error information for debugging
+            return f"[Error extracting PDF text: {type(e).__name__}: {str(e)}]"
     
-    for entry in entries:
-        abs_entry = os.path.abspath(entry)
+    def is_file_pdf(path):
+        """Check if a file is a PDF based on extension and optionally file header."""
+        # Check extension first for performance
+        if not path.lower().endswith('.pdf'):
+            return False
+        
+        # Optionally verify PDF header for extra safety
+        try:
+            with open(path, 'rb') as f:
+                header = f.read(5)
+                return header == b'%PDF-'
+        except Exception:
+            # If we can't read the file, assume it's not a valid PDF
+            return False     
+
+    def is_file_bin(path):
+        """
+        Check if a file is binary (non-text).
+        
+        Returns:
+            True if file is binary, False if it's text
+        """
+        
+        try:
+            with open(path, 'rb') as f:
+                chunk = f.read(1024)
+                if b'\0' in chunk:
+                    return True
+            return False
+        except Exception as e:
+            return True  # treat as binary if unreadable
+
+    
+    print("\nGathering source files...")
+    file_paths = set()
+    
+    for s in SOURCE:
+        abs_entry = os.path.abspath(s)
         if not os.path.exists(abs_entry):
-            print(f"WARNING: Source entry not found: {entry}")
+            print(f"WARNING: Source entry not found: {s}")
             continue
 
         # If it's a file, just add it
         if os.path.isfile(abs_entry):
             if not is_excluded(abs_entry):
-                all_files.add(abs_entry)
+                file_paths.add(abs_entry)
             else:
-                print(f"Excluding file: {entry}")
+                print(f"Excluding file: {s}")
             continue
 
         # If it's a directory, walk it
@@ -200,377 +305,226 @@ def gather_source_files(entries):
                 for filename in filenames:
                     filepath = os.path.join(root, filename)
                     if not is_excluded(filepath, abs_entry):
-                        all_files.add(filepath)
+                        file_paths.add(filepath)
         else:
-            print(f"Skipping unknown source entry: {entry}")
-
-    return sorted(list(all_files))
-
-
-def is_pdf_file(path):
-    """Check if a file is a PDF based on extension and optionally file header."""
-    # Check extension first for performance
-    if not path.lower().endswith('.pdf'):
-        return False
+            print(f"Skipping unknown source: {s}")
     
-    # Optionally verify PDF header for extra safety
-    try:
-        with open(path, 'rb') as f:
-            header = f.read(5)
-            return header == b'%PDF-'
-    except Exception:
-        # If we can't read the file, assume it's not a valid PDF
-        return False
+    file_paths = sorted(list(file_paths))
 
-
-def extract_text_from_pdf(path):
-    """
-    Extract text content from a PDF file using PyMuPDF.
-    
-    Returns a string containing all extracted text, or an error message if extraction fails.
-
-    We are extracting PDF text, for full PDF support use the anthropic PDF support (https://docs.anthropic.com/en/docs/build-with-claude/pdf-support). Enable citations for pdf image analysis.
-    """    
-    try:
-        # Open the PDF document
-        pdf_document = fitz.open(path)
-        
-        # Extract text from all pages
-        text_content = []
-        
-        # Add PDF metadata as header comment
-        text_content.append(f"[PDF Document: {os.path.basename(path)}]")
-        text_content.append(f"[Pages: {pdf_document.page_count}]")
-        
-        # Extract metadata if available
-        metadata = pdf_document.metadata
-        if metadata:
-            if metadata.get('title'):
-                text_content.append(f"[Title: {metadata['title']}]")
-            if metadata.get('author'):
-                text_content.append(f"[Author: {metadata['author']}]")
-        
-        text_content.append("[Content:]")
-        text_content.append("")
-        
-        # Extract text from each page
-        for page_num in range(pdf_document.page_count):
-            page = pdf_document[page_num]
-            
-            # Add page separator for multi-page documents
-            if pdf_document.page_count > 1:
-                text_content.append(f"\n└─ Page {page_num + 1}")
-            
-            # Extract text from the page
-            page_text = page.get_text()
-            
-            # Clean up the text: remove excessive whitespace but preserve structure
-            page_text = re.sub(r'\n{3,}', '\n\n', page_text)  # Limit consecutive newlines
-            page_text = page_text.strip()
-            
-            if page_text:
-                text_content.append(page_text)
-            else:
-                text_content.append("[No text content on this page]")
-        
-        # Close the document
-        pdf_document.close()
-        
-        # Join all content
-        full_text = '\n'.join(text_content)
-        
-        # If no meaningful text was extracted, indicate this
-        if not any(line.strip() and not line.startswith('[') for line in text_content):
-            return "[PDF contains no extractable text content - may be scanned/image-based]"
-        
-        return full_text
-        
-    except Exception as e:
-        # Return detailed error information for debugging
-        return f"[Error extracting PDF text: {type(e).__name__}: {str(e)}]"
-
-
-def is_binary_file(path, include_pdfs=False):
-    """
-    Check if a file is binary (non-text).
-    
-    Args:
-        path: File path to check
-        include_pdfs: If True and PDF support is enabled, PDFs are not considered binary
-    
-    Returns:
-        True if file is binary, False if it's text or (when enabled) a PDF
-    """
-    # If PDF support is requested and this is a PDF, it's not binary for our purposes
-    if include_pdfs and is_pdf_file(path):
-        return False
-    
-    try:
-        with open(path, 'rb') as f:
-            chunk = f.read(1024)
-            if b'\0' in chunk:
-                return True
-        return False
-    except Exception as e:
-        return True  # treat as binary if unreadable
-
-
-def read_files(file_paths, read_pdfs=False):
-    """
-    Read contents of files, with optional PDF text extraction.
-    
-    Args:
-        file_paths: List of file paths to read
-        read_pdfs: If True, extract text from PDF files
-    
-    Returns:
-        Dictionary mapping file paths to their contents
-    """
-    print("Reading files...")
-    
-    contents = {}
-    pdf_count = 0
+    print("\nReading files...")  
     
     for path in file_paths:
         if not os.path.isfile(path):
             print(f"Skipped: {path} (not found)")
             continue
 
-        # Check if this is a PDF and we should read it
-        if read_pdfs and is_pdf_file(path):
-            pdf_count += 1
-            contents[path] = extract_text_from_pdf(path)
-            continue
-
+        abs_path = os.path.abspath(path)
+        _, extension = os.path.splitext(abs_path)
+            
         # Check if file is binary
-        if is_binary_file(path, include_pdfs=read_pdfs):
-            contents[path] = "[binary content]"
-            continue
+        if is_file_bin(path):
+            # BINARY FILE
+            with open(path, "rb") as f:
+                file_data = f.read()
 
-        # Read as regular text file
-        try:
+            if is_file_pdf(path):
+                # PDF file
+                file_data_text = extract_text_from_pdf(path)
+                files_to_ai.append(
+                    FileData(
+                        file_type="pdf",
+                        path_abs=abs_path,
+                        path_rel=path,
+                        extension=extension,
+                        ai_share="pdf" in ai_shared_file_types,
+
+                        data=file_data,
+                        data_type="byte",
+                        data_size=len(file_data),
+                        media_type="pdf",
+
+                        ai_interpretable=True,
+                        ai_data_converted=file_data_text,
+                        ai_data_converted_type="str",
+                        ai_data_tokens=len(file_data_text)//4
+                    )
+                )
+            
+            else:
+                # Binary file
+                files_to_ai.append(
+                    FileData(
+                        file_type="bin",
+                        path_abs=abs_path,
+                        path_rel=path,
+                        extension=extension,
+                        ai_share=True,
+
+                        data=file_data,
+                        data_type="byte",
+                        data_size=len(file_data),
+                        media_type="pdf",
+
+                        ai_interpretable=False,
+                        ai_data_converted="[BINARY CONTENT]",
+                        ai_data_converted_type="str",
+                        ai_data_tokens=16//4
+                    )
+                )
+
+        else:
+            # TEXT FILE
             with open(path, 'r', encoding='utf-8') as f:
-                contents[path] = f.read()
+                file_data_text = f.read()
+            
+            files_to_ai.append(
+                FileData(
+                    file_type="text",
+                    path_abs=abs_path,
+                    path_rel=path,
+                    extension=extension,
+                    ai_share=True,
+
+                    data=file_data_text,
+                    data_type="str",
+                    data_size=len(file_data_text),
+                    media_type="text",
+
+                    ai_interpretable=True,
+                    ai_data_converted=file_data_text,
+                    ai_data_converted_type="str",
+                    ai_data_tokens=len(file_data_text)//4
+                )
+            )
+    
+    return files_to_ai
+
+
+def add_images(files_to_ai: List[FileData]) -> List[FileData]:
+    """
+    Parse command line arguments to extract image data from -img flags.
+    """
+
+    def get_image_media_type(file_path):
+        """
+        Determine the MIME type of an image file based on its extension and content.
+        
+        Args:
+            file_path: Path to the image file
+            
+        Returns:
+            String containing the MIME type (e.g., 'image/jpeg', 'image/png')
+            
+        Raises:
+            ValueError: If the file is not a supported image type
+        """
+        # First check the file extension
+        mime_type, _ = mimetypes.guess_type(file_path)
+        
+        # Validate it's an image type and is supported by Claude
+        supported_types = {
+            'image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'
+        }
+        
+        if mime_type and mime_type.lower() in supported_types:
+            return mime_type.lower()
+        
+        # If mimetypes couldn't determine it, try based on extension
+        ext = os.path.splitext(file_path)[1].lower()
+        extension_map = {
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg', 
+            '.png': 'image/png',
+            '.gif': 'image/gif',
+            '.webp': 'image/webp'
+        }
+        
+        if ext in extension_map:
+            return extension_map[ext]
+        
+        # Try to read file header to determine type
+        try:
+            with open(file_path, 'rb') as f:
+                header = f.read(16)
+                
+            # Check common image headers
+            if header.startswith(b'\xff\xd8\xff'):
+                return 'image/jpeg'
+            elif header.startswith(b'\x89PNG\r\n\x1a\n'):
+                return 'image/png'
+            elif header.startswith(b'GIF87a') or header.startswith(b'GIF89a'):
+                return 'image/gif'
+            elif header.startswith(b'RIFF') and b'WEBP' in header:
+                return 'image/webp'
+        except Exception:
+            pass
+        
+        raise ValueError(f"Unsupported or unrecognized image type for file: {file_path}")
+
+    def get_image_data(img_path):
+        """
+        Get base64 encoded string of image
+
+        Returns binary data, base64 data, image size (bytes)
+        """
+
+        # Validate that the file exists
+        if not os.path.isfile(img_path):
+            print(f"ERROR: Image file not found: {img_path}")
+            return bytes(), "", -1
+            
+
+        # Read and encode the image file
+        try:
+            with open(img_path, 'rb') as f:
+                image_data = f.read()
+                
+            # Validate file size (Claude has limits, typically around 5MB per image)
+            file_size_mb = len(image_data) / (1024 * 1024)
+            if file_size_mb > 5:
+                print(f"WARNING: Image {img_path} is {file_size_mb:.1f}MB, which may exceed Claude's size limits")
+                
+            img_data_base64 = base64.b64encode(image_data).decode('utf-8')
+            
+            return image_data, img_data_base64, len(image_data)
+            
         except Exception as e:
-            print(f"Error reading {path}: {e}")
-            contents[path] = f"[Error reading file: {e}]"
+            print(f"ERROR: Failed to read/encode image {img_path}: {e}")
+            return bytes(), "", -1
     
-    if read_pdfs and pdf_count > 0:
-        print(f"Extracted text from {pdf_count} PDF file(s)")
     
-    return contents
 
-
-def parse_image_arguments():
-    """
-    Parse command line arguments to extract image paths from -img flags.
-    
-    Returns:
-        List of image paths specified via -img flags
-    """
-    image_paths = []
-    
-    # Look for -img flags followed by paths
     i = 0
     while i < len(sys.argv):
         if sys.argv[i] == '-img' and i + 1 < len(sys.argv):
-            # Next argument should be the image path
             img_path = sys.argv[i + 1]
-            # Convert to absolute path for consistency
-            abs_img_path = os.path.abspath(img_path)
-            image_paths.append(abs_img_path)
-            i += 2  # Skip both -img and the path
+            abs_path = os.path.abspath(img_path)
+            _, extension = os.path.splitext(abs_path)
+            img_data, img_data_base64, size = get_image_data(img_path)
+            files_to_ai.append(
+                FileData(
+                    file_type="image",
+                    path_abs=os.path.abspath(img_path),
+                    path_rel=img_path,
+                    extension=extension,
+                    ai_share=True, # default true if it was included as flag
+                    
+                    data=img_data,
+                    data_type="binary",
+                    data_size=size,
+                    media_type=get_image_media_type(img_path),
+
+                    ai_interpretable=True,
+                    ai_data_converted=img_data_base64,
+                    ai_data_converted_type="base64",
+                    ai_data_tokens=estimate_image_tokens(img_path)//4,
+                )
+            )
+            i += 2
         else:
             i += 1
     
-    return image_paths
-
-
-def determine_image_media_type(file_path):
-    """
-    Determine the MIME type of an image file based on its extension and content.
-    
-    Args:
-        file_path: Path to the image file
-        
-    Returns:
-        String containing the MIME type (e.g., 'image/jpeg', 'image/png')
-        
-    Raises:
-        ValueError: If the file is not a supported image type
-    """
-    # First check the file extension
-    mime_type, _ = mimetypes.guess_type(file_path)
-    
-    # Validate it's an image type and is supported by Claude
-    supported_types = {
-        'image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'
-    }
-    
-    if mime_type and mime_type.lower() in supported_types:
-        return mime_type.lower()
-    
-    # If mimetypes couldn't determine it, try based on extension
-    ext = os.path.splitext(file_path)[1].lower()
-    extension_map = {
-        '.jpg': 'image/jpeg',
-        '.jpeg': 'image/jpeg', 
-        '.png': 'image/png',
-        '.gif': 'image/gif',
-        '.webp': 'image/webp'
-    }
-    
-    if ext in extension_map:
-        return extension_map[ext]
-    
-    # Try to read file header to determine type
-    try:
-        with open(file_path, 'rb') as f:
-            header = f.read(16)
-            
-        # Check common image headers
-        if header.startswith(b'\xff\xd8\xff'):
-            return 'image/jpeg'
-        elif header.startswith(b'\x89PNG\r\n\x1a\n'):
-            return 'image/png'
-        elif header.startswith(b'GIF87a') or header.startswith(b'GIF89a'):
-            return 'image/gif'
-        elif header.startswith(b'RIFF') and b'WEBP' in header:
-            return 'image/webp'
-    except Exception:
-        pass
-    
-    raise ValueError(f"Unsupported or unrecognized image type for file: {file_path}")
-
-
-def process_images(image_paths):
-    """
-    Process image files by reading, validating, and encoding them for Claude API.
-    
-    Args:
-        image_paths: List of file paths to process
-        
-    Returns:
-        List of dictionaries containing processed image data with format:
-        {
-            'type': 'image',
-            'source': {
-                'type': 'base64',
-                'media_type': 'image/jpeg',
-                'data': 'base64_encoded_data'
-            },
-            'path': '/path/to/original/file'  # Added for debugging/logging
-        }
-    """
-    processed_images = []
-    
-    if not image_paths:
-        return processed_images
-        
-    print(f"\nProcessing {len(image_paths)} image(s)...")
-    
-    for img_path in image_paths:
-        try:
-            # Validate that the file exists
-            if not os.path.isfile(img_path):
-                print(f"ERROR: Image file not found: {img_path}")
-                continue
-                
-            # Determine the media type
-            try:
-                media_type = determine_image_media_type(img_path)
-            except ValueError as e:
-                print(f"ERROR: {e}")
-                continue
-                
-            # Read and encode the image file
-            try:
-                with open(img_path, 'rb') as f:
-                    image_data = f.read()
-                    
-                # Validate file size (Claude has limits, typically around 5MB per image)
-                file_size_mb = len(image_data) / (1024 * 1024)
-                if file_size_mb > 5:
-                    print(f"WARNING: Image {img_path} is {file_size_mb:.1f}MB, which may exceed Claude's size limits")
-                    
-                # Encode to base64
-                base64_data = base64.b64encode(image_data).decode('utf-8')
-                
-                # Create the structure expected by Claude API
-                image_content = {
-                    'type': 'image',
-                    'source': {
-                        'type': 'base64',
-                        'media_type': media_type,
-                        'data': base64_data
-                    },
-                    'path': img_path  # Keep for logging/debugging
-                }
-                
-                processed_images.append(image_content)
-                print(f"✓ Processed: {rel_path(img_path)} ({media_type}, {file_size_mb:.1f}MB)")
-                
-            except Exception as e:
-                print(f"ERROR: Failed to read/encode image {img_path}: {e}")
-                continue
-                
-        except Exception as e:
-            print(f"ERROR: Unexpected error processing image {img_path}: {e}")
-            continue
-    
-    if processed_images:
-        print(f"Successfully processed {len(processed_images)} image(s)")
-    else:
-        print("No images were successfully processed")
-        
-    return processed_images
-
-
-def estimate_image_tokens(processed_images):
-    """
-    Estimate the token count for images.
-    
-    Based on Claude documentation, images typically consume ~1600 tokens each,
-    but this can vary significantly based on image size, complexity, and format.
-    This provides a rough estimate for planning purposes.
-    An other way to calculate them: tokens = (witdh px * height px)/750
-    
-    Args:
-        processed_images: List of processed image dictionaries
-        
-    Returns:
-        Integer estimate of tokens consumed by images
-    """
-    if not processed_images:
-        return 0
-        
-    # Base estimate per image - Claude documentation suggests ~1600 tokens
-    # but this can vary from 85 to 1600+ depending on image characteristics
-    base_tokens_per_image = 1200  # Conservative middle estimate
-    
-    total_tokens = 0
-    
-    for img in processed_images:
-        # Get the base64 data length as a rough proxy for image complexity
-        try:
-            data_length = len(img['source']['data'])
-            
-            # Adjust estimate based on data size
-            # Larger base64 data usually means more complex/higher resolution images
-            if data_length > 500000:  # Large image
-                tokens = 1600
-            elif data_length > 200000:  # Medium image  
-                tokens = 1200
-            else:  # Small image
-                tokens = 800
-                
-            total_tokens += tokens
-            
-        except KeyError:
-            # Fallback to base estimate if we can't access the data
-            total_tokens += base_tokens_per_image
-    
-    return total_tokens
+    return files_to_ai
 
 
 def export_md_file(data, filename):
@@ -578,7 +532,7 @@ def export_md_file(data, filename):
     filepath = os.path.join(output_dir, filename)
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(f"{data}")
-    print(f"Saved to: {rel_path(filepath)}")
+    print(f"Saved to: {os.path.relpath(filepath).replace('\\', '/')}")
 
 # Log file for prompts
 def log_prompt(content):
@@ -643,23 +597,20 @@ def write_or_warn_from_claude_output(output_text):
     print(f"\nSummary: {files_written} file(s) written, {files_deleted} file(s) deleted.")
 
 
-def get_directory_tree(base_dirs, source_files=None, colorize=True, read_pdfs=False):
+def get_directory_tree(base_dirs, files_to_ai=None):
     """
-    Build a directory tree for the given base_dirs. If `source_files` contains
+    Build a directory tree for the given base_dirs. If `files_to_ai` contains
     a file path that is being printed, that line will be wrapped in ANSI green.
     
     base_dirs: list of directory paths to show
-    source_files: list of file paths to highlight (optional)
-    colorize: whether to use ANSI color codes (default True)
+    files_to_ai: list of FileData objects (optional)
     """
 
     print("Building directory tree...")
     project_root = os.path.abspath(os.getcwd())
     output_lines = []
 
-    source_files = source_files or []
-    # Normalize source files for robust comparisons (abs path + case normalization)
-    normalized_sources = set(os.path.normcase(os.path.abspath(p)) for p in source_files)
+    normalized_sources = set(os.path.normcase(os.path.abspath(f.path_abs)) for f in files_to_ai)
 
     def is_nested(child, parents):
         child = os.path.abspath(child)
@@ -699,17 +650,12 @@ def get_directory_tree(base_dirs, source_files=None, colorize=True, read_pdfs=Fa
             entry_text = entry
 
             if os.path.isfile(full_path):
-                if is_marked:
-                    file_size = os.path.getsize(full_path)
-                    size_kb = file_size / 1024
-                    if not is_binary_file(full_path, read_pdfs):
-                        tokens = file_size // 4
-                    else:
-                        tokens = 20
-                    entry_text += f"{' '*(20-len(os.path.basename(full_path)))} [{size_kb:5.1f} KB | ~{tokens:5.0f} tokens]"
+                file_size = os.path.getsize(full_path)
+                size_kb = file_size / 1024
+                entry_text += f"{' '*(20-len(os.path.basename(full_path)))} [{size_kb:5.1f} KB | ~TEMPORARY TO FIX tokens]"
 
-            if colorize and is_marked:
-                entry_text = f"\033[32m{entry_text}\033[0m"
+                if is_marked:
+                    entry_text = f"\033[32m{entry_text}\033[0m"
 
             output_lines.append(f"{prefix}{connector}{entry_text}")
 
@@ -767,24 +713,20 @@ def has_uncommitted_changes():
 
     return changes_count != 0
 
-
-def rel_path(abs_path) -> str:
-    """Convert absolute path to relative path from current directory"""
-    rel_path = os.path.relpath(abs_path).replace('\\', '/')
-    # Ensure it starts with ./
-    if not rel_path.startswith('./'):
-        rel_path = './' + rel_path
-    return rel_path
-
 def main():
-    # Parse command line flags
+    files_to_ai: List[FileData] = []
+    ai_shared_file_types = []
+
     run_claude = '-ai' in sys.argv
     run_readlast = '-readlast' in sys.argv
     force = '-f' in sys.argv
-    read_pdfs = '-pdf' in sys.argv
     
-    # Parse image paths from command line arguments
-    image_paths = parse_image_arguments()
+    if '-pdf' in sys.argv:
+        ai_shared_file_types.append("pdf")
+    
+    if '-img' in sys.argv:
+        files_to_ai = add_images(files_to_ai)
+        ai_shared_file_types.append("img")
     
     if run_readlast:
         print(f"Applying files from last Claude response ({output_dir}/clauderesponse.md)...")
@@ -800,67 +742,67 @@ def main():
             print("Empty clauderesponse file.")
         return
 
-    # Build directory tree and read files with PDF support if enabled
-    source_files = gather_source_files(SOURCE)
-    tree_dirs = get_directory_tree(TREE_DIRS, source_files, read_pdfs=read_pdfs)
-    source_content = read_files(source_files, read_pdfs=read_pdfs)
-    
-    # Process images if any were specified
-    processed_images = process_images(image_paths) if image_paths else []
-    
-    # Format file contents for prompt
-    data_files = ""
-    for path, content in source_content.items():
-        data_files += f"\n--- {rel_path(path)} ---\n{content}\n"
+    files_to_ai = add_source(files_to_ai, SOURCE, ai_shared_file_types)
+    tree_dirs = get_directory_tree(TREE_DIRS, files_to_ai)
 
+    # Build the message content array with images and text
+    message_content = []
+    data_files = ""
+
+    # Scan file_to_ai: add images, build file data
+    for file_to_ai in files_to_ai:
+        if not file_to_ai.ai_share:
+            continue
+
+        if file_to_ai.file_type == "image":
+            message_content.extend([{
+                'type': file_to_ai.file_type,
+                'source': {
+                    'type': file_to_ai.ai_data_converted_type,
+                    'media_type': file_to_ai.media_type,
+                    'data': file_to_ai.ai_data_converted
+                },
+            }])
+        
+        elif file_to_ai.file_type == "text":
+            data_files += f"\n--- {file_to_ai.path_rel} ---\n{file_to_ai.ai_data_converted}\n\n"
+        
+        elif file_to_ai.file_type == "bin":
+            data_files += f"\n--- {file_to_ai.path_rel} ---\n{file_to_ai.ai_data_converted}\n\n"
+        else:
+            print(f"Unexpected file type while building message_content: {file_to_ai.file_type}")
+    
+    # Add prompt
+    message_content.extend([{"type": "text", "text": PROMPT}])
+
+    # Add directory tree
+    message_content.extend([{"type": "text", "text": f"Directory tree structure: {tree_dirs}"}])
+
+    # Add file data
+    if data_files != "":
+        message_content.extend([{"type": "text", "text": data_files}])
+    
     # Calculate token estimates
-    text_tokens = len(PROMPT) + len(tree_dirs) + len(data_files) // 4
-    image_tokens = estimate_image_tokens(processed_images)
-    total_tokens = text_tokens + image_tokens
+    print(f"Input tokens [ESTIMATED]: {(len(message_content)+len(SYSTEM))//4}") #!!! wrong
     
-    print(f"Input tokens [ESTIMATED]: {total_tokens}")
-    if image_tokens > 0:
-        print(f"  - Text tokens: {text_tokens}")
-        print(f"  - Image tokens: {image_tokens} ({len(processed_images)} image(s))")
+    export_md_file("\n".join([SYSTEM, PROMPT, tree_dirs, data_files]), "userfullprompt.md")
+    export_md_file(message_content, "message_content.md")
     
+    # Check -ai flag
+    if not run_claude:
+        print("Not executing AI request...")
+        return
+
     # Check for uncommitted git changes
     if not force and has_uncommitted_changes():
         print("ERROR: You have uncommitted changes in your git repository.")
         print("Please commit or stash your changes before running this script.")
         sys.exit(1)
 
-    # Build the message content array with images and text
-    message_content = []
-    
-    # Add images first (recommended order for Claude API)
-    for img in processed_images:
-        message_content.append({
-            'type': 'image',
-            'source': img['source']  # Contains type, media_type, and data
-        })
-    
-    # Add text content
-    message_content.extend([
-        {"type": "text", "text": PROMPT},
-        {"type": "text", "text": f"Directory tree structure: {tree_dirs}"}
-    ])
-
-    if data_files != "":
-        message_content.extend([
-            {"type": "text", "text": data_files}
-        ])
-    
-    export_md_file("\n".join([SYSTEM, PROMPT, tree_dirs, data_files]), "userfullprompt.md")
-    export_md_file(message_content, "message_content.md")
-    
-    if not run_claude:
-        print("Not executing AI request...")
-        return
-
     client = Anthropic(api_key=ANTHROPIC["API_KEY"])
     print("Sending request to Claude...")
 
-    # Enable streaming to avoid the 10-minute non-streaming timeout
+    # Enable streaming
     response = client.messages.create(
         model=ANTHROPIC["CLAUDE_MODEL"],
         max_tokens=int(ANTHROPIC["MAX_TOKENS"]),
