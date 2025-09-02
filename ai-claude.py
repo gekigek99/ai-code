@@ -643,7 +643,7 @@ def write_or_warn_from_claude_output(output_text):
     print(f"\nSummary: {files_written} file(s) written, {files_deleted} file(s) deleted.")
 
 
-def get_directory_tree(base_dirs, source_files=None, colorize=True):
+def get_directory_tree(base_dirs, source_files=None, colorize=True, read_pdfs=False):
     """
     Build a directory tree for the given base_dirs. If `source_files` contains
     a file path that is being printed, that line will be wrapped in ANSI green.
@@ -699,14 +699,14 @@ def get_directory_tree(base_dirs, source_files=None, colorize=True):
             entry_text = entry
 
             if os.path.isfile(full_path):
-                try:
+                if is_marked:
                     file_size = os.path.getsize(full_path)
                     size_kb = file_size / 1024
-                    tokens = file_size // 4
-                    if is_marked:
-                        entry_text += f"{' '*(20-len(os.path.basename(full_path)))} [{size_kb:5.1f} KB | ~{tokens:5.0f} tokens]"
-                except Exception:
-                    entry_text += "  [? KB]"
+                    if not is_binary_file(full_path, read_pdfs):
+                        tokens = file_size // 4
+                    else:
+                        tokens = 20
+                    entry_text += f"{' '*(20-len(os.path.basename(full_path)))} [{size_kb:5.1f} KB | ~{tokens:5.0f} tokens]"
 
             if colorize and is_marked:
                 entry_text = f"\033[32m{entry_text}\033[0m"
@@ -802,7 +802,7 @@ def main():
 
     # Build directory tree and read files with PDF support if enabled
     source_files = gather_source_files(SOURCE)
-    tree_dirs = get_directory_tree(TREE_DIRS, source_files)
+    tree_dirs = get_directory_tree(TREE_DIRS, source_files, read_pdfs=read_pdfs)
     source_content = read_files(source_files, read_pdfs=read_pdfs)
     
     # Process images if any were specified
