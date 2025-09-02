@@ -27,17 +27,17 @@ TREE_DIRS = config.get("tree_dirs") or SOURCE
 EXCLUDE_PATTERNS = config.get("exclude_patterns")
 SYSTEM = config.get("system") + """
 
-# --- file output patterns --- #
+# ----- file output patterns ----- #
 
 If a file should be deleted, write:
-+++ ./path/to/file.ext [DELETE] +++
++++++ ./path/to/file.ext [DELETE] +++++
   (no content needed)
-+++
++++++
 
 If you want to create or overwrite a file, return the full updated code in this format:
-+++ ./path/to/file.ext +++
++++++ ./path/to/file.ext +++++
   <new content>
-+++
++++++
 
 Only output updated, new, or deleted files."""
 PROMPT = config.get("prompt")
@@ -274,7 +274,7 @@ def add_source(files_to_ai: List[FileData], SOURCE, ai_shared_file_types=[]) -> 
 
     
     print("\nGathering source files...")
-    file_paths = set()
+    abs_file_paths = set()
     
     for s in SOURCE:
         abs_entry = os.path.abspath(s)
@@ -285,7 +285,7 @@ def add_source(files_to_ai: List[FileData], SOURCE, ai_shared_file_types=[]) -> 
         # If it's a file, just add it
         if os.path.isfile(abs_entry):
             if not is_excluded(abs_entry):
-                file_paths.add(abs_entry)
+                abs_file_paths.add(abs_entry)
             else:
                 print(f"Excluding file: {s}")
             continue
@@ -305,36 +305,39 @@ def add_source(files_to_ai: List[FileData], SOURCE, ai_shared_file_types=[]) -> 
                 for filename in filenames:
                     filepath = os.path.join(root, filename)
                     if not is_excluded(filepath, abs_entry):
-                        file_paths.add(filepath)
+                        abs_file_paths.add(filepath)
         else:
             print(f"Skipping unknown source: {s}")
     
-    file_paths = sorted(list(file_paths))
+    abs_file_paths = sorted(list(abs_file_paths))
 
     print("\nReading files...")  
     
-    for path in file_paths:
-        if not os.path.isfile(path):
-            print(f"Skipped: {path} (not found)")
+    for abs_path in abs_file_paths:
+        from pathlib import Path
+
+        rel_path = f"./{os.path.relpath(abs_path, os.getcwd())}"
+
+        if not os.path.isfile(abs_path):
+            print(f"Skipped: {rel_path} (not found)")
             continue
 
-        abs_path = os.path.abspath(path)
         _, extension = os.path.splitext(abs_path)
             
         # Check if file is binary
-        if is_file_bin(path):
+        if is_file_bin(abs_path):
             # BINARY FILE
-            with open(path, "rb") as f:
+            with open(abs_path, "rb") as f:
                 file_data = f.read()
 
-            if is_file_pdf(path):
+            if is_file_pdf(abs_path):
                 # PDF file
-                file_data_text = extract_text_from_pdf(path)
+                file_data_text = extract_text_from_pdf(abs_path)
                 files_to_ai.append(
                     FileData(
                         file_type="pdf",
                         path_abs=abs_path,
-                        path_rel=path,
+                        path_rel=rel_path,
                         extension=extension,
                         ai_share="pdf" in ai_shared_file_types,
 
@@ -356,7 +359,7 @@ def add_source(files_to_ai: List[FileData], SOURCE, ai_shared_file_types=[]) -> 
                     FileData(
                         file_type="bin",
                         path_abs=abs_path,
-                        path_rel=path,
+                        path_rel=rel_path,
                         extension=extension,
                         ai_share=True,
 
@@ -374,14 +377,14 @@ def add_source(files_to_ai: List[FileData], SOURCE, ai_shared_file_types=[]) -> 
 
         else:
             # TEXT FILE
-            with open(path, 'r', encoding='utf-8') as f:
+            with open(abs_path, 'r', encoding='utf-8') as f:
                 file_data_text = f.read()
             
             files_to_ai.append(
                 FileData(
                     file_type="text",
                     path_abs=abs_path,
-                    path_rel=path,
+                    path_rel=rel_path,
                     extension=extension,
                     ai_share=True,
 
@@ -491,8 +494,6 @@ def add_images(files_to_ai: List[FileData]) -> List[FileData]:
         except Exception as e:
             print(f"ERROR: Failed to read/encode image {img_path}: {e}")
             return bytes(), "", -1
-    
-    
 
     i = 0
     while i < len(sys.argv):
@@ -550,14 +551,14 @@ def write_or_warn_from_claude_output(output_text):
     # Save the raw response to output directory
     export_md_file(output_text, "clauderesponse.md")
 
-    # Regex: match "+++ filename [TAG] +++" ... content ... "+++"
+    # Regex: match "+++++ filename [TAG] +++++" ... content ... "+++++"
     block_pattern = re.compile(
-        r'^\+\+\+\s*'              # opening +++
+        r'^\+\+\+\+\+\s*'          # opening +++++
         r'(.+?)'                   # group(1) = filename
         r'(?:\s*\[([A-Z]+)\])?'    # optional group(2) = TAG (DELETE, UPDATE, etc.)
-        r'\s*\+\+\+\s*\n'          # end of header line
+        r'\s*\+\+\+\+\+\s*\n'      # end of header line
         r'(.*?)'                   # group(3) = content (non-greedy)
-        r'^\+\+\+$',               # closing +++
+        r'^\+\+\+\+\+$',           # closing +++++
         re.MULTILINE | re.DOTALL
     )
 
@@ -765,10 +766,18 @@ def main():
             }])
         
         elif file_to_ai.file_type == "text":
-            data_files += f"\n--- {file_to_ai.path_rel} ---\n{file_to_ai.ai_data_converted}\n\n"
+            message_content.extend([{
+                "type": "text", 
+                "text": f"\n----- {file_to_ai.path_rel} -----\n{file_to_ai.ai_data_converted}-----\n\n"
+            }])
+            data_files += message_content[-1]["text"]
         
         elif file_to_ai.file_type == "bin":
-            data_files += f"\n--- {file_to_ai.path_rel} ---\n{file_to_ai.ai_data_converted}\n\n"
+            message_content.extend([{
+                "type": "text", 
+                "text": f"\n----- {file_to_ai.path_rel} -----\n{file_to_ai.ai_data_converted}-----\n\n"
+            }])
+            data_files += message_content[-1]["text"]
         else:
             print(f"Unexpected file type while building message_content: {file_to_ai.file_type}")
     
@@ -777,15 +786,11 @@ def main():
 
     # Add directory tree
     message_content.extend([{"type": "text", "text": f"Directory tree structure: {tree_dirs}"}])
-
-    # Add file data
-    if data_files != "":
-        message_content.extend([{"type": "text", "text": data_files}])
     
     # Calculate token estimates
-    print(f"Input tokens [ESTIMATED]: {(len(message_content)+len(SYSTEM))//4}") #!!! wrong
+    print(f"Input tokens [ESTIMATED]: {(len(str(message_content))+len(str(SYSTEM))) // 4}")
     
-    export_md_file("\n".join([SYSTEM, PROMPT, tree_dirs, data_files]), "userfullprompt.md")
+    export_md_file("\n\n".join([SYSTEM, PROMPT, tree_dirs, data_files]), "userfullprompt.md")
     export_md_file(message_content, "message_content.md")
     
     # Check -ai flag
