@@ -386,7 +386,7 @@ def add_source(files_to_ai: List[FileData], SOURCE, ai_shared_file_types=[]) -> 
                         ai_interpretable=False,
                         ai_data_converted="[BINARY CONTENT]",
                         ai_data_converted_type="str",
-                        ai_data_tokens=16//4
+                        ai_data_tokens=20
                     )
                 )
 
@@ -616,17 +616,20 @@ def write_or_warn_from_claude_output(output_text):
 def get_directory_tree(base_dirs, files_to_ai: List[FileData] = None):
     """
     Build a directory tree for the given base_dirs. If `files_to_ai` contains
-    a file path that is being printed, that line will be wrapped in ANSI green.
-    
-    base_dirs: list of directory paths to show
-    files_to_ai: list of FileData objects (optional)
+    a file path that is being printed, that line will be wrapped in ANSI green
+    and will include a token estimate when available.
     """
 
     print("Building directory tree...")
     project_root = os.path.abspath(os.getcwd())
     output_lines = []
 
-    normalized_sources = set(os.path.normcase(os.path.abspath(f.path_abs)) for f in files_to_ai)
+    # Normalize files_to_ai into a dict keyed by normalized absolute path
+    files_to_ai = files_to_ai or []
+    files_to_ai_norm = {
+        os.path.normcase(os.path.abspath(f.path_abs)): f
+        for f in files_to_ai
+    }
 
     def is_nested(child, parents):
         child = os.path.abspath(child)
@@ -636,10 +639,12 @@ def get_directory_tree(base_dirs, files_to_ai: List[FileData] = None):
                 if os.path.commonpath([child, parent]) == parent and child != parent:
                     return True
             except ValueError:
+                # different drives on Windows
                 continue
         return False
 
     def walk_dir(path, prefix="", base_dir=None):
+        # Skip excluded directories early
         if is_excluded(path, base_dir or path):
             return
         try:
@@ -648,65 +653,86 @@ def get_directory_tree(base_dirs, files_to_ai: List[FileData] = None):
             output_lines.append(f"{prefix}[Error reading {path}]: {e}")
             return
 
+        # Filter entries by exclusion rules
         filtered_entries = []
         for entry in entries:
-            full_path = os.path.join(path, entry)
-            if not is_excluded(full_path, base_dir or path):
+            abs_path = os.path.join(path, entry)
+            if not is_excluded(abs_path, base_dir or path):
                 filtered_entries.append(entry)
 
         for i, entry in enumerate(filtered_entries):
-            full_path = os.path.join(path, entry)
+            abs_path = os.path.join(path, entry)
             is_last = (i == len(filtered_entries) - 1)
             connector = "└── " if is_last else "├── "
 
-            # Normalize the current entry path for comparison
-            full_norm = os.path.normcase(os.path.abspath(full_path))
-            is_marked = full_norm in normalized_sources
+            # Build entry text
+            base_name = os.path.basename(abs_path)
+            entry_text = base_name
 
-            entry_text = entry
+            # Try to get file data from files_to_ai_norm using consistent normalization
+            filedata = files_to_ai_norm.get(os.path.normcase(os.path.abspath(abs_path)))
 
-            if os.path.isfile(full_path):
-                file_size = os.path.getsize(full_path)
-                size_kb = file_size / 1024
-                entry_text += f"{' '*(20-len(os.path.basename(full_path)))} [{size_kb:5.1f} KB | ~TO BE FIXED tokens]"
+            if os.path.isfile(abs_path):
+                try:
+                    file_size = os.path.getsize(abs_path)
+                    size_kb = file_size / 1024
+                except Exception:
+                    size_kb = 0.0
 
-                if is_marked:
-                    entry_text = f"\033[32m{entry_text}\033[0m"
+                if filedata:
+                    # Show token estimate if available
+                    token_est = getattr(filedata, "ai_data_tokens", None)
+                    if token_est is None:
+                        token_str = "~N/A tokens"
+                    else:
+                        token_str = f"~{token_est:5.0f} tokens"
+                    # Color files that are in files_to_ai
+                    entry_text = f"\033[32m{base_name} {base_name.ljust(20)[len(base_name):]} [{size_kb:5.1f} KB | {token_str}]\033[0m"
+                else:
+                    # File not indexed in files_to_ai -> show size only and mark as not indexed
+                    entry_text = f"{base_name} {base_name.ljust(20)[len(base_name):]} [{size_kb:5.1f} KB ]"
+
+            else:
+                # Directories and other non-files: just display name
+                entry_text = entry
 
             output_lines.append(f"{prefix}{connector}{entry_text}")
 
-            # Recurse into directories (directories are not colored)
-            if os.path.isdir(full_path):
+            # Recurse into directories
+            if os.path.isdir(abs_path):
                 extension = "    " if is_last else "│   "
-                walk_dir(full_path, prefix + extension, base_dir or path)
+                walk_dir(abs_path, prefix + extension, base_dir or path)
 
+    # Normalize base_dirs and check existence
     abs_dirs = [os.path.abspath(d) for d in base_dirs]
 
-    # Check for missing directories
     missing_dirs = [d for d in abs_dirs if not os.path.isdir(d)]
     if missing_dirs:
         output_lines.append("\nERROR: The following directory(ies) do not exist:")
         for d in missing_dirs:
             rel_path = os.path.relpath(d, start=project_root)
             output_lines.append(f" - {rel_path}")
-        return "\n".join(output_lines)
+        dir_tree = "\n".join(output_lines)
+        print(dir_tree)
+        return dir_tree
 
-    # Filter out nested dirs
+    # Remove nested entries so we don't print duplicates
     roots_to_print = []
     for d in abs_dirs:
         if not is_nested(d, roots_to_print):
             roots_to_print.append(d)
 
-    for dir in roots_to_print:
-        if is_excluded(dir):
+    for root_dir in roots_to_print:
+        if is_excluded(root_dir):
             continue
-        rel_name = os.path.relpath(dir, start=project_root)
+        rel_name = os.path.relpath(root_dir, start=project_root)
         output_lines.append(f"\nDirectory tree structure for {rel_name}/")
-        walk_dir(dir, base_dir=dir)
+        walk_dir(root_dir, base_dir=root_dir)
 
     dir_tree = "\n".join(output_lines)
     print(dir_tree)
     return dir_tree
+
 
 
 def has_uncommitted_changes():
