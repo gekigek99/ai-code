@@ -9,9 +9,9 @@ import subprocess
 import yaml
 import fnmatch
 import fitz
-from typing import List, Dict, Any, Optional, Tuple
-from dataclasses import dataclass, field
-from PIL import Image
+from typing import List, Any
+from dataclasses import dataclass, asdict
+from typing import Any, List, Optional
 
 # python ./ai-code/ai-claude.py -ai
 
@@ -71,6 +71,21 @@ class FileData:
     ai_data_converted: str
     ai_data_converted_type: str
     ai_data_tokens: int
+
+    @classmethod
+    def get(
+        cls, 
+        files: List['FileData'], 
+        path: str
+    ) -> Optional['FileData']:
+        """
+        Search for a FileData in the list by absolute or relative path.
+        Returns the FileData if found, otherwise None.
+        """
+        for f in files:
+            if f.path_abs == path or f.path_rel == path:
+                return f
+        return None
 
 def is_excluded(path, base_dir=None):
     """Check if a path matches any exclude pattern."""
@@ -518,7 +533,7 @@ def add_images(files_to_ai: List[FileData]) -> List[FileData]:
                     ai_interpretable=True,
                     ai_data_converted=img_data_base64,
                     ai_data_converted_type="base64",
-                    ai_data_tokens=estimate_image_tokens(img_path)//4,
+                    ai_data_tokens=1600 if len(img_data_base64) > 500000 else 1200 if len(img_data_base64) > 200000 else 800
                 )
             )
             i += 2
@@ -598,7 +613,7 @@ def write_or_warn_from_claude_output(output_text):
     print(f"\nSummary: {files_written} file(s) written, {files_deleted} file(s) deleted.")
 
 
-def get_directory_tree(base_dirs, files_to_ai=None):
+def get_directory_tree(base_dirs, files_to_ai: List[FileData] = None):
     """
     Build a directory tree for the given base_dirs. If `files_to_ai` contains
     a file path that is being printed, that line will be wrapped in ANSI green.
@@ -653,7 +668,7 @@ def get_directory_tree(base_dirs, files_to_ai=None):
             if os.path.isfile(full_path):
                 file_size = os.path.getsize(full_path)
                 size_kb = file_size / 1024
-                entry_text += f"{' '*(20-len(os.path.basename(full_path)))} [{size_kb:5.1f} KB | ~TEMPORARY TO FIX tokens]"
+                entry_text += f"{' '*(20-len(os.path.basename(full_path)))} [{size_kb:5.1f} KB | ~TO BE FIXED tokens]"
 
                 if is_marked:
                     entry_text = f"\033[32m{entry_text}\033[0m"
