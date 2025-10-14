@@ -43,3 +43,9 @@ ANTHROPIC:
   CLAUDE_MODEL: claude-opus-4-20250514
   # claude-sonnet-4-20250514
   # claude-opus-4-20250514
+
+# Web search configuration:
+# WEBSEARCH: master toggle to enable/disable automatic web searches that will be
+# included in the message_content sent to Claude (DuckDuckGo).
+WEBSEARCH: false
+WEBSEARCH_MAX_RESULTS: 5

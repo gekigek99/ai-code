@@ -42,6 +42,9 @@ If you want to create or overwrite a file, return the full updated code in this 
 Only output updated, new, or deleted files."""
 PROMPT = config.get("prompt")
 
+# New: websearch toggle and params from config
+WEBSEARCH: bool = config.get("WEBSEARCH", False)
+WEBSEARCH_MAX_RESULTS = int(config.get("WEBSEARCH_MAX_RESULTS", 5))
 
 script_path = os.path.abspath(__file__)
 script_dir = os.path.dirname(script_path)
@@ -812,7 +815,7 @@ def main():
 
     # Add directory tree
     message_content.extend([{"type": "text", "text": f"Directory tree structure: {tree_dirs}"}])
-    
+
     # Calculate token estimates
     print(f"Input tokens [ESTIMATED]: {(len(str(message_content))+len(str(SYSTEM))) // 4}")
     
@@ -842,18 +845,13 @@ def main():
         messages=[
             {"role": "user", "content": message_content}
         ],
-        tools=[],
+        tools=[{"name": "web_search", "type": "web_search_20250305", "max_uses": WEBSEARCH_MAX_RESULTS}] if WEBSEARCH else [],
         thinking={
             "type": "enabled",
             "budget_tokens": int(ANTHROPIC["MAX_TOKENS_THINK"]),
         },
         stream=True
     )
-
-    # Stream and accumulate the response with proper handling for thinking and content
-    data_response = ""
-    thinking_content = ""
-    raw_data = []  # Store all raw event data
     
     print("\nClaude's response:")
 
@@ -862,62 +860,175 @@ def main():
     with open(recv_path, "w", encoding="utf-8") as f:
         f.write("")
 
+    # Stream and accumulate the response with proper handling for thinking and content
+    data_response = ""
+    thinking_content = ""
+    raw_data = []
+
+    # Helper to pretty-print a web-search log entry to terminal
+    def _print_websearch_entry(entry):
+        # entry is expected to be a dict with keys: title, url, citation_text, page_age, source, optionally result_index
+        print("\n--- WEBSEARCH HIT ---")
+        title = entry.get("title") or "(title not found)"
+        url = entry.get("url") or "(no url)"
+        citation = entry.get("cited_text") or "(citation text not found)"
+        page_age = entry.get("page_age") or "(page age not found)"
+        src = entry.get("source") or "(source unknown)"
+        idx = entry.get("result_index")
+        if idx is not None:
+            print(f"[result ID {idx}]")
+            print(f"Title       : {title}")
+            print(f"URL         : {url}")
+            print(f"Citation    : {citation}")
+            print(f"Page age    : {page_age}")
+            print(f"Source      : {src}")
+            print("---------------------\n")
+
+    # Stream events
     for event in response:
-        # Store raw event data
-        raw_data.append({
-            'type': event.type,
-            'event': str(event)
-        })
-        
+        # Keep original raw_data capture behavior
         try:
+            raw_data.append({
+                'type': event.type,
+                'event': str(event)
+            })
+        except Exception:
+            # best-effort: if event can't be stringified, still continue
+            try:
+                raw_data.append({'type': getattr(event, 'type', '(unknown)'), 'event': repr(event)})
+            except Exception:
+                raw_data.append({'type': '(unknown)', 'event': '(unserializable event)'})
+
+        try:
+            # content_block_delta: text / thinking / citations
             if event.type == "content_block_delta":
                 if hasattr(event, 'delta') and hasattr(event.delta, 'type'):
-                    if event.delta.type == 'thinking_delta':
-                        # Thinking content (internal reasoning)
-                        thinking_chunk = event.delta.thinking
+                    d_type = getattr(event.delta, 'type', None)
+
+                    if d_type == 'thinking_delta':
+                        thinking_chunk = getattr(event.delta, 'thinking', '')
                         thinking_content += thinking_chunk
-                    elif event.delta.type == 'text_delta':
-                        # Regular content from Claude
-                        chunk = event.delta.text
+
+                    elif d_type == 'text_delta':
+                        chunk = getattr(event.delta, 'text', '')
+                        # print stream to terminal (keeps previous behavior)
                         print(chunk, end="", flush=True)
                         data_response += chunk
-                        
-                        # Append chunk to clauderesponse-recv.md
-                        with open(recv_path, "a", encoding="utf-8") as f:
-                            f.write(chunk)
 
+                        # append to recv file for recording the streamed response
+                        try:
+                            with open(recv_path, "a", encoding="utf-8") as f:
+                                f.write(chunk)
+                        except Exception as e:
+                            print(f"\n[Warning] Failed to append chunk to {recv_path}: {e}")
+
+                    elif d_type == 'citations_delta':
+                        # citation may be a single object or list
+                        citation_obj = getattr(event.delta, 'citation', None)
+                        citation_list = citation_obj if isinstance(citation_obj, (list, tuple)) else [citation_obj] if citation_obj is not None else []
+                        for cit in citation_list:
+                            try:
+                                cited_text = getattr(cit, 'cited_text', None) or ""
+                                title = getattr(cit, 'title', None) or ""
+                                url = getattr(cit, 'url', None) or ""
+                                page_age = getattr(cit, 'page_age', None) or None
+                                entry = {
+                                    "title": title,
+                                    "url": url,
+                                    "citation_text": cited_text,
+                                    "page_age": page_age,
+                                    "source": "citation_delta"
+                                }
+                                # Print directly to terminal (no file logging)
+                                _print_websearch_entry(entry)
+                            except Exception as e:
+                                print(f"\n[DEBUG] Failed to parse/print citation delta: {e}")
+
+                    else:
+                        # Unhandled event types - print debug
+                        print(f"\n[DEBUG: Unhandled event type '{event.type}']")
                 else:
                     print(f"\n[DEBUG: Unexpected delta structure in {event.type}]")
-            
+
+            # content_block_start: may carry a server tool use block (web_search results)
+            elif event.type == "content_block_start":
+                cb = getattr(event, 'content_block', None)
+                if cb is None:
+                    continue
+
+                # Try to extract a list of results from likely attributes
+                content_items = getattr(cb, 'content', None) or getattr(cb, 'results', None) or getattr(cb, 'content_items', None)
+
+                # If content_items is iterable, iterate and print each
+                if isinstance(content_items, (list, tuple)):
+                    for idx, item in enumerate(content_items):
+                        try:
+                            title = getattr(item, 'title', None) or ""
+                            url = getattr(item, 'url', None) or ""
+                            page_age = getattr(item, 'page_age', None) or None
+                            # try common snippet attributes
+                            snippet = getattr(item, 'snippet', None) or getattr(item, 'excerpt', None) or getattr(item, 'cited_text', None) or ""
+                            entry = {
+                                "title": title,
+                                "url": url,
+                                "citation_text": snippet,
+                                "page_age": page_age,
+                                "source": "web_search_result",
+                                "result_index": idx
+                            }
+                            _print_websearch_entry(entry)
+                        except Exception as e:
+                            print(f"\n[DEBUG] Failed to parse/print web_search result item: {e}")
+                else:
+                    # If not iterable, try to read top-level metadata and print
+                    try:
+                        title = getattr(cb, 'title', "") or ""
+                        url = getattr(cb, 'url', "") or ""
+                        page_age = getattr(cb, 'page_age', None) or None
+                        snippet = getattr(cb, 'snippet', "") or ""
+                        if any([title, url, snippet, page_age]):
+                            entry = {
+                                "title": title,
+                                "url": url,
+                                "citation_text": snippet,
+                                "page_age": page_age,
+                                "source": "web_search_result_unstructured"
+                            }
+                            _print_websearch_entry(entry)
+                    except Exception:
+                        # Unhandled event types - print debug
+                        print(f"\n[DEBUG: Unhandled event type '{event.type}']")
+
+            elif event.type == "content_block_stop":
+                # no-op
+                pass
+
             elif event.type == "message_start":
                 print(f"\n[Message Start Event Data]: {event}")
-            
+
             elif event.type == "message_stop":
                 print(f"\n[Message Stop Event Data]: {event}")
+                # stop streaming loop on message_stop
                 break
-                
+
             elif event.type == "thinking_block_start":
                 print("\n[Claude is thinking...]")
-                
-            elif event.type == "content_block_start":
-                # Content block starting
-                pass
-                
-            elif event.type == "content_block_stop":
-                # Content block ending
-                pass
-            
+
             elif event.type == "message_delta":
-                # Message delta - usually contains usage information
+                # usually metadata/usage info - ignore
                 pass
-                
+
             else:
-                # Log any other unexpected event types
+                # Unhandled event types - print debug
                 print(f"\n[DEBUG: Unhandled event type '{event.type}']")
-                
+
         except AttributeError as e:
-            print(f"\n[ERROR: AttributeError for event type '{event.type}': {e}]")
+            print(f"\n[ERROR: AttributeError for event type '{getattr(event,'type',str(event))}': {e}]")
             print(f"[Event details: {event}]")
+            continue
+        except Exception as e:
+            # Catch-all so a malformed event doesn't stop the stream
+            print(f"\n[ERROR: Unexpected error while processing event '{getattr(event,'type',str(event))}': {type(e).__name__}: {e}]")
             continue
 
     # Save all data to output directory
