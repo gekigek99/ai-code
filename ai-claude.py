@@ -832,6 +832,9 @@ def main():
         print("ERROR: You have uncommitted changes in your git repository.")
         print("Please commit or stash your changes before running this script.")
         sys.exit(1)
+    
+    if WEBSEARCH:
+        print("WEBSEARCH active!")
 
     client = Anthropic(api_key=ANTHROPIC["API_KEY"])
     print("Sending request to Claude...")
