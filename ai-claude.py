@@ -15,6 +15,10 @@ from typing import Any, List, Optional
 
 # python ./ai-code/ai-claude.py -ai
 
+# todo: 
+# - Se i file modificati non sono nella lista di file inviati segnalalo nel resoconto finale
+# - add a flag to generate and auto copy a text with structure of the repository, the prompt, the current source [] and the prompt to generate a similar source to add the the prompt.yaml file
+
 # Load configuration from YAML
 def load_config():
     with open(os.path.join(os.path.dirname(__file__), "ai-claude-prompt.yaml"), "r", encoding='utf-8') as f:
