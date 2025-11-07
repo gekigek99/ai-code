@@ -9,9 +9,8 @@ import subprocess
 import yaml
 import fnmatch
 import fitz
-from typing import List, Any
+from typing import List, Any, Optional, Set, Tuple
 from dataclasses import dataclass, asdict
-from typing import Any, List, Optional
 
 # python ./ai-code/ai-claude.py -ai
 
@@ -77,10 +76,6 @@ class FileData:
     ai_data_converted: str
     ai_data_converted_type: str
     ai_data_tokens: int
-
-# --- New globals to track original source files and unlisted modifications ---
-ORIGINAL_SOURCE_PATHS = set()  # normalized absolute paths for all discovered source files
-UNLISTED_MODIFIED_FILES = []   # list of tuples (action, filename, abs_path, existed_before, in_original)
 
 # ANSI color codes
 COLOR_YELLOW = "\033[33m"
@@ -193,8 +188,13 @@ def is_excluded(path, base_dir=None):
 
 
 
-def add_source(files_to_ai: List[FileData], SOURCE, ai_shared_file_types=[]) -> List[FileData]:
-    """adds source"""
+def add_source(files_to_ai: List[FileData], SOURCE, ai_shared_file_types=[]) -> Tuple[List[FileData], Set[str]]:
+    """adds source and returns (files_to_ai, original_source_paths)
+
+    The function preserves the original logic but does not write to global variables.
+    It returns a set of normalized absolute paths for the discovered source files so callers
+    can keep track without globals.
+    """
 
     def extract_text_from_pdf(path):
         """
@@ -331,16 +331,9 @@ def add_source(files_to_ai: List[FileData], SOURCE, ai_shared_file_types=[]) -> 
         else:
             print(f"Skipping unknown source: {s}")
     
-    abs_file_paths = sorted(list(abs_file_paths))
+    abs_file_paths = set(os.path.normcase(os.path.abspath(p)) for p in sorted(list(abs_file_paths)))
 
-    # --- Record the original discovered source file absolute paths in the global set ---
-    global ORIGINAL_SOURCE_PATHS
-    try:
-        ORIGINAL_SOURCE_PATHS = set(os.path.normcase(os.path.abspath(p)) for p in abs_file_paths)
-    except Exception:
-        ORIGINAL_SOURCE_PATHS = set()
-
-    print(f"Discovered {len(ORIGINAL_SOURCE_PATHS)} source file(s)")
+    print(f"Discovered {len(abs_file_paths)} source file(s)")
 
     print("\nReading files...")  
     
@@ -431,7 +424,8 @@ def add_source(files_to_ai: List[FileData], SOURCE, ai_shared_file_types=[]) -> 
                 )
             )
     
-    return files_to_ai
+    # Return both the collected FileData list and the set of original source paths
+    return files_to_ai, abs_file_paths
 
 
 def add_images(files_to_ai: List[FileData]) -> List[FileData]:
@@ -577,8 +571,17 @@ def log_prompt(content):
     except Exception as e:
         _warn(f"Warning: Could not write to log file: {e}")
 
-def write_or_warn_from_claude_output(output_text):
-    """Process Claude's response and write or delete files."""
+
+def write_or_warn_from_claude_output(output_text: str, abs_file_paths: Optional[Set[str]] = None):
+    """Process Claude's response and write or delete files.
+
+    This function no longer depends on module-level globals. Callers should pass the
+    set of normalized absolute paths discovered from the sources (original_source_paths)
+    so the function can decide whether a written/deleted file was part of the original repo.
+    """
+    if abs_file_paths is None:
+        abs_file_paths = set()
+
     # Save the raw response to output directory
     export_md_file(output_text, "clauderesponse.md")
 
@@ -598,10 +601,6 @@ def write_or_warn_from_claude_output(output_text):
     files_written = 0
     files_deleted = 0
 
-    # clear any previous unlisted records for this run
-    global UNLISTED_MODIFIED_FILES
-    UNLISTED_MODIFIED_FILES = []
-
     # We'll accumulate printed summary lines and also detailed entries
     detailed_entries = []  # tuples: (action, file_name, abs_target, existed_before, in_original)
 
@@ -615,7 +614,7 @@ def write_or_warn_from_claude_output(output_text):
                     os.remove(file_name)
                     files_deleted += 1
                     # Print deletion line; if file was not in original source, print in yellow
-                    if abs_target not in ORIGINAL_SOURCE_PATHS:
+                    if abs_target not in abs_file_paths:
                         print(f"{COLOR_YELLOW}File deleted: {file_name}{COLOR_RESET}")
                     else:
                         print(f"File deleted: {file_name}")
@@ -625,7 +624,7 @@ def write_or_warn_from_claude_output(output_text):
                 print(f"File not found (for deletion): {file_name}")
 
             # Record in detailed entries for summary
-            in_original = abs_target in ORIGINAL_SOURCE_PATHS
+            in_original = abs_target in abs_file_paths
             detailed_entries.append(("DELETE", file_name, abs_target, existed_before, in_original))
             continue
 
@@ -644,7 +643,7 @@ def write_or_warn_from_claude_output(output_text):
             files_written += 1
 
             # Decide how to print the immediate "File written" line
-            in_original = abs_target in ORIGINAL_SOURCE_PATHS
+            in_original = abs_target in abs_file_paths
             if not existed_before:
                 # NEW file -> print in blue
                 print(f"{COLOR_BLUE}File written: {file_name}{COLOR_RESET}")
@@ -661,7 +660,7 @@ def write_or_warn_from_claude_output(output_text):
             print(f"Error writing {file_name}: {e}")
 
         # Record in detailed entries for summary
-        in_original = abs_target in ORIGINAL_SOURCE_PATHS
+        in_original = abs_target in abs_file_paths
         detailed_entries.append(("WRITE", file_name, abs_target, existed_before, in_original))
 
     # Build and print the summary section with categorized tags
@@ -678,7 +677,7 @@ def write_or_warn_from_claude_output(output_text):
                     tag = "[DELETED]"
                     line = f"{fname} {tag}"
                 else:
-                    tag = "[DELETED with WARNING]"
+                    tag = "[DELETED - WARNING, not in source]"
                     line = f"{COLOR_YELLOW}{fname} {tag}{COLOR_RESET}"
             elif action == "WRITE":
                 if not existed_before:
@@ -689,7 +688,7 @@ def write_or_warn_from_claude_output(output_text):
                         tag = "[UPDATED]"
                         line = f"{fname} {tag}"
                     else:
-                        tag = "[UPDATED with WARNING]"
+                        tag = "[UPDATED - WARNING, not in source]"
                         line = f"{COLOR_YELLOW}{fname} {tag}{COLOR_RESET}"
             else:
                 line = f"{fname} [UNKNOWN ACTION]"
@@ -839,6 +838,7 @@ def has_uncommitted_changes():
 
     return changes_count != 0
 
+
 def main():
     files_to_ai: List[FileData] = []
     ai_shared_file_types = []
@@ -860,15 +860,16 @@ def main():
         if not os.path.isfile(md_path):
             print(f"File not found: {md_path}")
             sys.exit(2)
+        _, original_source_abs_file_paths = add_source([], SOURCE, ai_shared_file_types)
         with open(md_path, encoding="utf-8") as f:
             data_response = f.read()
         if data_response.strip():
-            write_or_warn_from_claude_output(data_response)
+            write_or_warn_from_claude_output(data_response, original_source_abs_file_paths)
         else:
             print("Empty clauderesponse file.")
         return
 
-    files_to_ai = add_source(files_to_ai, SOURCE, ai_shared_file_types)
+    files_to_ai, original_source_abs_file_paths = add_source(files_to_ai, SOURCE, ai_shared_file_types)
     tree_dirs = get_directory_tree(TREE_DIRS, files_to_ai)
 
     # Build the message content array with images and text
@@ -1143,7 +1144,7 @@ def main():
     # Process the accumulated response
     if data_response.strip():
         print(f"\nProcessing Claude's response...")
-        write_or_warn_from_claude_output(data_response)
+        write_or_warn_from_claude_output(data_response, original_source_abs_file_paths)
     else:
         print("\nNo response received from Claude.")
     
