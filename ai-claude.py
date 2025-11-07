@@ -16,8 +16,7 @@ from typing import Any, List, Optional
 # python ./ai-code/ai-claude.py -ai
 
 # todo: 
-# - Se i file modificati non sono nella lista di file inviati segnalalo nel resoconto finale
-# - add a flag to generate and auto copy a text with structure of the repository, the prompt, the current source [] and the prompt to generate a similar source to add the the prompt.yaml file
+# - add a flag to generate and auto copy a text with structure of the repository, the prompt, the current "source: []" in yaml format and the prompt to generate a similar source to manually add the the prompt.yaml file
 
 # Load configuration from YAML
 def load_config():
@@ -78,6 +77,21 @@ class FileData:
     ai_data_converted: str
     ai_data_converted_type: str
     ai_data_tokens: int
+
+# --- New globals to track original source files and unlisted modifications ---
+ORIGINAL_SOURCE_PATHS = set()  # normalized absolute paths for all discovered source files
+UNLISTED_MODIFIED_FILES = []   # list of tuples (action, filename, abs_path, existed_before, in_original)
+
+# ANSI color codes
+COLOR_YELLOW = "\033[33m"
+COLOR_BLUE = "\033[34m"
+COLOR_RESET = "\033[0m"
+
+
+def _warn(msg: str):
+    """Print a warning in yellow."""
+    print(f"{COLOR_YELLOW}{msg}{COLOR_RESET}")
+
 
 def is_excluded(path, base_dir=None):
     """Check if a path matches any exclude pattern."""
@@ -176,6 +190,7 @@ def is_excluded(path, base_dir=None):
                         return True
     
     return False
+
 
 
 def add_source(files_to_ai: List[FileData], SOURCE, ai_shared_file_types=[]) -> List[FileData]:
@@ -286,7 +301,7 @@ def add_source(files_to_ai: List[FileData], SOURCE, ai_shared_file_types=[]) -> 
     for s in SOURCE:
         abs_entry = os.path.abspath(s)
         if not os.path.exists(abs_entry):
-            print(f"WARNING: Source entry not found: {s}")
+            _warn(f"WARNING: Source entry not found: {s}")
             continue
 
         # If it's a file, just add it
@@ -317,6 +332,15 @@ def add_source(files_to_ai: List[FileData], SOURCE, ai_shared_file_types=[]) -> 
             print(f"Skipping unknown source: {s}")
     
     abs_file_paths = sorted(list(abs_file_paths))
+
+    # --- Record the original discovered source file absolute paths in the global set ---
+    global ORIGINAL_SOURCE_PATHS
+    try:
+        ORIGINAL_SOURCE_PATHS = set(os.path.normcase(os.path.abspath(p)) for p in abs_file_paths)
+    except Exception:
+        ORIGINAL_SOURCE_PATHS = set()
+
+    print(f"Discovered {len(ORIGINAL_SOURCE_PATHS)} source file(s)")
 
     print("\nReading files...")  
     
@@ -492,7 +516,7 @@ def add_images(files_to_ai: List[FileData]) -> List[FileData]:
             # Validate file size (Claude has limits, typically around 5MB per image)
             file_size_mb = len(image_data) / (1024 * 1024)
             if file_size_mb > 5:
-                print(f"WARNING: Image {img_path} is {file_size_mb:.1f}MB, which may exceed Claude's size limits")
+                _warn(f"WARNING: Image {img_path} is {file_size_mb:.1f}MB, which may exceed Claude's size limits")
                 
             img_data_base64 = base64.b64encode(image_data).decode('utf-8')
             
@@ -551,7 +575,7 @@ def log_prompt(content):
         with open(log_path, 'a', encoding='utf-8') as log_file:
             log_file.write(f"\n=== Prompt logged at {timestamp} ===\n" + content + "\n")
     except Exception as e:
-        print(f"Warning: Could not write to log file: {e}")
+        _warn(f"Warning: Could not write to log file: {e}")
 
 def write_or_warn_from_claude_output(output_text):
     """Process Claude's response and write or delete files."""
@@ -574,21 +598,41 @@ def write_or_warn_from_claude_output(output_text):
     files_written = 0
     files_deleted = 0
 
+    # clear any previous unlisted records for this run
+    global UNLISTED_MODIFIED_FILES
+    UNLISTED_MODIFIED_FILES = []
+
+    # We'll accumulate printed summary lines and also detailed entries
+    detailed_entries = []  # tuples: (action, file_name, abs_target, existed_before, in_original)
+
     for file_name, tag, content_block in matches:
+        abs_target = os.path.normcase(os.path.abspath(file_name))
         if tag == "DELETE":
             # Delete the file if it exists
-            if os.path.exists(file_name):
+            existed_before = os.path.exists(file_name)
+            if existed_before:
                 try:
                     os.remove(file_name)
                     files_deleted += 1
-                    print(f"File deleted: {file_name}")
+                    # Print deletion line; if file was not in original source, print in yellow
+                    if abs_target not in ORIGINAL_SOURCE_PATHS:
+                        print(f"{COLOR_YELLOW}File deleted: {file_name}{COLOR_RESET}")
+                    else:
+                        print(f"File deleted: {file_name}")
                 except Exception as e:
                     print(f"Error deleting {file_name}: {e}")
             else:
                 print(f"File not found (for deletion): {file_name}")
+
+            # Record in detailed entries for summary
+            in_original = abs_target in ORIGINAL_SOURCE_PATHS
+            detailed_entries.append(("DELETE", file_name, abs_target, existed_before, in_original))
             continue
 
         content = content_block.strip()
+
+        # Determine if file existed before writing
+        existed_before = os.path.exists(file_name)
 
         # Ensure directory exists (or use '.' for top-level files)
         target_dir = os.path.dirname(file_name) or '.'
@@ -597,12 +641,59 @@ def write_or_warn_from_claude_output(output_text):
         try:
             with open(file_name, 'w', encoding='utf-8') as f:
                 f.write(content + '\n')
-            print(f"File written: {file_name}")
             files_written += 1
+
+            # Decide how to print the immediate "File written" line
+            in_original = abs_target in ORIGINAL_SOURCE_PATHS
+            if not existed_before:
+                # NEW file -> print in blue
+                print(f"{COLOR_BLUE}File written: {file_name}{COLOR_RESET}")
+            else:
+                # Existed before
+                if in_original:
+                    # a normal update
+                    print(f"File written: {file_name}")
+                else:
+                    # Updated but not in original source -> warning (yellow)
+                    print(f"{COLOR_YELLOW}File written: {file_name}{COLOR_RESET}")
+
         except Exception as e:
             print(f"Error writing {file_name}: {e}")
 
-    print(f"\nSummary: {files_written} file(s) written, {files_deleted} file(s) deleted.")
+        # Record in detailed entries for summary
+        in_original = abs_target in ORIGINAL_SOURCE_PATHS
+        detailed_entries.append(("WRITE", file_name, abs_target, existed_before, in_original))
+
+    # Build and print the summary section with categorized tags
+    print("\nSummary:")
+    print(f" {files_written} file(s) written, {files_deleted} file(s) deleted.")
+
+    if detailed_entries:
+        print("\nDetailed changes:")
+        for action, fname, abs_path, existed_before, in_original in detailed_entries:
+            tag = ""
+            line = ""
+            if action == "DELETE":
+                if in_original:
+                    tag = "[DELETED]"
+                    line = f"{fname} {tag}"
+                else:
+                    tag = "[DELETED with WARNING]"
+                    line = f"{COLOR_YELLOW}{fname} {tag}{COLOR_RESET}"
+            elif action == "WRITE":
+                if not existed_before:
+                    tag = "[NEW]"
+                    line = f"{COLOR_BLUE}{fname} {tag}{COLOR_RESET}"
+                else:
+                    if in_original:
+                        tag = "[UPDATED]"
+                        line = f"{fname} {tag}"
+                    else:
+                        tag = "[UPDATED with WARNING]"
+                        line = f"{COLOR_YELLOW}{fname} {tag}{COLOR_RESET}"
+            else:
+                line = f"{fname} [UNKNOWN ACTION]"
+            print(f" - {line}")
 
 
 def get_directory_tree(base_dirs, files_to_ai: List[FileData] = None):
@@ -724,6 +815,7 @@ def get_directory_tree(base_dirs, files_to_ai: List[FileData] = None):
     dir_tree = "\n".join(output_lines)
     print(dir_tree)
     return dir_tree
+
 
 
 
