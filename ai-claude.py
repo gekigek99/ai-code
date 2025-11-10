@@ -9,7 +9,7 @@ import subprocess
 import yaml
 import fnmatch
 import fitz
-from typing import List, Any, Optional, Set, Tuple
+from typing import List, Any, Optional, Set, Tuple, Dict
 from dataclasses import dataclass, asdict
 
 # python ./ai-code/ai-claude.py -ai
@@ -340,7 +340,7 @@ def add_source(files_to_ai: List[FileData], SOURCE, ai_shared_file_types=[]) -> 
     for abs_path in abs_file_paths:
         from pathlib import Path
 
-        rel_path = f"./{os.path.relpath(abs_path, os.getcwd())}"
+        rel_path = f".\{os.path.relpath(abs_path, os.getcwd())}"
 
         if not os.path.isfile(abs_path):
             print(f"Skipped: {rel_path} (not found)")
@@ -572,18 +572,13 @@ def log_prompt(content):
         _warn(f"Warning: Could not write to log file: {e}")
 
 
-def write_or_warn_from_claude_output(output_text: str, abs_file_paths: Optional[Set[str]] = None):
-    """Process Claude's response and write or delete files.
-
-    This function no longer depends on module-level globals. Callers should pass the
-    set of normalized absolute paths discovered from the sources (original_source_paths)
-    so the function can decide whether a written/deleted file was part of the original repo.
-    """
+def claude_data_to_file(text_data: str, abs_file_paths: Optional[Set[str]] = None):
+    """Process Claude's response data and write or delete files"""
     if abs_file_paths is None:
         abs_file_paths = set()
 
     # Save the raw response to output directory
-    export_md_file(output_text, "clauderesponse.md")
+    export_md_file(text_data, "clauderesponse.md")
 
     # Regex: match "+++++ filename [TAG] +++++" ... content ... "+++++"
     block_pattern = re.compile(
@@ -596,7 +591,7 @@ def write_or_warn_from_claude_output(output_text: str, abs_file_paths: Optional[
         re.MULTILINE | re.DOTALL
     )
 
-    matches = block_pattern.findall(output_text)
+    matches = block_pattern.findall(text_data)
 
     files_written = 0
     files_deleted = 0
@@ -816,8 +811,6 @@ def get_directory_tree(base_dirs, files_to_ai: List[FileData] = None):
     return dir_tree
 
 
-
-
 def has_uncommitted_changes():
     result = subprocess.run(
         ['git', 'status', '--porcelain'],
@@ -839,22 +832,234 @@ def has_uncommitted_changes():
     return changes_count != 0
 
 
+def prompt_claude(
+    client: Optional[Anthropic] = None,
+    api_key: Optional[str] = None,
+    model: str = "claude-opus-4-1-20250805",
+    system: str = "",
+    messages: Optional[List[Dict[str, Any]]] = None,
+    max_tokens: int = 1000,
+    temperature: float = 1.0,
+    websearch: bool = False,
+    websearch_max_results: int = 5,
+    thinking_budget: int = 0,
+    stream: bool = True,
+    recv_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    General helper to call Anthropic/Claude with streaming support.
+
+    Returns a dict with keys:
+      - status: "ok" | "no_response" | "error"
+      - data_response: accumulated visible text
+      - thinking_content: accumulated "thinking" text (if any)
+      - raw_data: list of raw event captures
+      - error: error string if status == "error"
+    """
+    # Validate client / api_key
+    if client is None:
+        if not api_key:
+            raise ValueError("Either `client` or `api_key` must be provided")
+        client = Anthropic(api_key=api_key)
+
+    messages = messages or []
+        
+    tools = []
+    if websearch:
+        print("WEBSEARCH active!")
+        tools = [{"name": "web_search", "type": "web_search_20250305", "max_uses": int(websearch_max_results)}]
+
+    # Clear recv file if provided
+    if recv_path:
+        try:
+            with open(recv_path, "w", encoding="utf-8") as f:
+                f.write("")
+        except Exception as e:
+            print(f"[warn] Could not clear recv file {recv_path}: {e}")
+
+    def _print_websearch_entry(entry: Dict[str, Any]):
+        print("\n--- WEBSEARCH HIT ---")
+        title = entry.get("title") or "(title not found)"
+        url = entry.get("url") or "(no url)"
+        citation = entry.get("citation_text") or entry.get("cited_text") or "(citation text not found)"
+        page_age = entry.get("page_age") or "(page age not found)"
+        src = entry.get("source") or "(source unknown)"
+        idx = entry.get("result_index")
+        if idx is not None:
+            print(f"[result ID {idx}]")
+        print(f"Title       : {title}")
+        print(f"URL         : {url}")
+        print(f"Citation    : {citation}")
+        print(f"Page age    : {page_age}")
+        print(f"Source      : {src}")
+        print("---------------------\n")
+
+    # Start the request
+    try:
+        response_iter = client.messages.create(
+            model=model,
+            max_tokens=int(max_tokens),
+            temperature=float(temperature),
+            system=system,
+            messages=messages,
+            tools=tools if tools else [],
+            thinking={"type": "enabled", "budget_tokens": int(thinking_budget)} if thinking_budget and int(thinking_budget) > 0 else {"type": "disabled"},
+            stream=bool(stream),
+        )
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": f"Failed to start request: {type(e).__name__}: {e}",
+            "data_response": "",
+            "thinking_content": "",
+            "raw_data": []
+        }
+
+    data_response = ""
+    thinking_content = ""
+    raw_data: List[Dict[str, Any]] = []
+
+    try:
+        for event in response_iter:
+            # Capture raw event (best-effort)
+            try:
+                raw_data.append({"type": getattr(event, "type", "(unknown)"), "event": str(event)})
+            except Exception:
+                raw_data.append({"type": getattr(event, "type", "(unknown)"), "event": repr(event)})
+
+            # Handle event types similarly to your previous logic
+            try:
+                if event.type == "content_block_delta":
+                    delta = getattr(event, "delta", None)
+                    if delta is None:
+                        continue
+                    d_type = getattr(delta, "type", None)
+
+                    if d_type == "thinking_delta":
+                        thinking_chunk = getattr(delta, "thinking", "")
+                        thinking_content += thinking_chunk
+
+                    elif d_type == "text_delta":
+                        chunk = getattr(delta, "text", "") or ""
+                        print(chunk, end="", flush=True)
+                        data_response += chunk
+                        if recv_path:
+                            try:
+                                with open(recv_path, "a", encoding="utf-8") as f:
+                                    f.write(chunk)
+                            except Exception as e:
+                                print(f"[warn] Failed to append to recv file: {e}")
+
+                    elif d_type == "citations_delta":
+                        citation_obj = getattr(delta, "citation", None)
+                        citation_list = citation_obj if isinstance(citation_obj, (list, tuple)) else [citation_obj] if citation_obj is not None else []
+                        for cit in citation_list:
+                            try:
+                                entry = {
+                                    "title": getattr(cit, "title", "") or "",
+                                    "url": getattr(cit, "url", "") or "",
+                                    "citation_text": getattr(cit, "cited_text", "") or "",
+                                    "page_age": getattr(cit, "page_age", None),
+                                    "source": "citation_delta",
+                                }
+                                _print_websearch_entry(entry)
+                            except Exception as e:
+                                print(f"[debug] Failed to parse citation delta: {e}")
+
+                    else:
+                        # unexpected subtype
+                        print(f"\n[debug] Unhandled content_block_delta subtype: {d_type}")
+
+                elif event.type == "content_block_start":
+                    cb = getattr(event, "content_block", None)
+                    content_items = getattr(cb, "content", None) or getattr(cb, "results", None) or getattr(cb, "content_items", None)
+                    if isinstance(content_items, (list, tuple)):
+                        for idx, item in enumerate(content_items):
+                            try:
+                                entry = {
+                                    "title": getattr(item, "title", ""),
+                                    "url": getattr(item, "url", ""),
+                                    "citation_text": getattr(item, "snippet", "") or getattr(item, "excerpt", "") or getattr(item, "cited_text", "") or "",
+                                    "page_age": getattr(item, "page_age", None),
+                                    "source": "web_search_result",
+                                    "result_index": idx,
+                                }
+                                _print_websearch_entry(entry)
+                            except Exception as e:
+                                print(f"[debug] Failed to parse web_search result item: {e}")
+                    else:
+                        try:
+                            title = getattr(cb, "title", "") or ""
+                            url = getattr(cb, "url", "") or ""
+                            snippet = getattr(cb, "snippet", "") or ""
+                            page_age = getattr(cb, "page_age", None)
+                            if any([title, url, snippet, page_age]):
+                                entry = {
+                                    "title": title,
+                                    "url": url,
+                                    "citation_text": snippet,
+                                    "page_age": page_age,
+                                    "source": "web_search_result_unstructured",
+                                }
+                                _print_websearch_entry(entry)
+                        except Exception:
+                            print(f"\n[debug] Unhandled content_block_start structure")
+
+                elif event.type == "message_stop":
+                    # final stop - break out
+                    break
+
+                elif event.type == "thinking_block_start":
+                    print("\n[Claude is thinking...]")
+
+                else:
+                    # ignore/unhandled events
+                    pass
+
+            except AttributeError as e:
+                print(f"[error] AttributeError while processing event '{getattr(event,'type', str(event))}': {e}")
+                continue
+
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": f"Streaming/iteration failed: {type(e).__name__}: {e}",
+            "data_response": data_response,
+            "thinking_content": thinking_content,
+            "raw_data": raw_data
+        }
+
+    status = "ok" if data_response.strip() else "no_response"
+    return {
+        "status": status,
+        "data_response": data_response,
+        "thinking_content": thinking_content,
+        "raw_data": raw_data,
+        "error": None if status == "ok" else None
+    }
+
+
 def main():
+    """
+    Replacement main() that integrates prompt_claude().
+    Drop this in replacing your previous main() and remove the ad-hoc client / streaming block.
+    """
     files_to_ai: List[FileData] = []
     ai_shared_file_types = []
 
     run_claude = '-ai' in sys.argv
-    run_readlast = '-readlast' in sys.argv
+    run_last = '-last' in sys.argv
     force = '-f' in sys.argv
-    
+
     if '-pdf' in sys.argv:
         ai_shared_file_types.append("pdf")
-    
+
     if '-img' in sys.argv:
         files_to_ai = add_images(files_to_ai)
         ai_shared_file_types.append("img")
-    
-    if run_readlast:
+
+    # Handle last prompt: reuse saved clauderesponse.md
+    if run_last:
         print(f"Applying files from last Claude response ({output_dir}/clauderesponse.md)...")
         md_path = os.path.join(output_dir, "clauderesponse.md")
         if not os.path.isfile(md_path):
@@ -864,19 +1069,19 @@ def main():
         with open(md_path, encoding="utf-8") as f:
             data_response = f.read()
         if data_response.strip():
-            write_or_warn_from_claude_output(data_response, original_source_abs_file_paths)
+            claude_data_to_file(data_response, original_source_abs_file_paths)
         else:
             print("Empty clauderesponse file.")
         return
 
+    # Discover and read sources
     files_to_ai, original_source_abs_file_paths = add_source(files_to_ai, SOURCE, ai_shared_file_types)
     tree_dirs = get_directory_tree(TREE_DIRS, files_to_ai)
 
-    # Build the message content array with images and text
+    # Build message_content and data aggregation
     message_content = []
     data_files = ""
 
-    # Scan file_to_ai: add images, build file data
     for file_to_ai in files_to_ai:
         if not file_to_ai.ai_share:
             continue
@@ -890,265 +1095,69 @@ def main():
                     'data': file_to_ai.ai_data_converted
                 },
             }])
-        
-        elif file_to_ai.file_type == "text":
-            message_content.extend([{
-                "type": "text", 
-                "text": f"\n----- {file_to_ai.path_rel} -----\n{file_to_ai.ai_data_converted}-----\n\n"
-            }])
-            data_files += message_content[-1]["text"]
-        
-        elif file_to_ai.file_type == "bin":
-            message_content.extend([{
-                "type": "text", 
-                "text": f"\n----- {file_to_ai.path_rel} -----\n{file_to_ai.ai_data_converted}-----\n\n"
-            }])
-            data_files += message_content[-1]["text"]
+
+        elif file_to_ai.file_type in ("text", "bin"):
+            entry_text = f"\n----- {file_to_ai.path_rel} -----\n{file_to_ai.ai_data_converted}-----\n\n"
+            message_content.extend([{"type": "text", "text": entry_text}])
+            data_files += entry_text
+
         else:
             print(f"Unexpected file type while building message_content: {file_to_ai.file_type}")
-    
-    # Add prompt
-    message_content.extend([{"type": "text", "text": PROMPT}])
 
-    # Add directory tree
+    # Add prompt and directory tree
+    message_content.extend([{"type": "text", "text": PROMPT}])
     message_content.extend([{"type": "text", "text": f"Directory tree structure: {tree_dirs}"}])
 
-    # Calculate token estimates
-    print(f"Input tokens [ESTIMATED]: {(len(str(message_content))+len(str(SYSTEM))) // 4}")
-    
+    # Token estimate (approx)
+    print(f"Input tokens [ESTIMATED]: {(len(str(message_content)) + len(str(SYSTEM))) // 4}")
+
+    # Export assembled prompt / message content for record
     export_md_file("\n\n".join([SYSTEM, PROMPT, tree_dirs, data_files]), "userfullprompt.md")
     export_md_file(message_content, "message_content.md")
-    
-    # Check -ai flag
+
+    # If -ai flag not provided, stop here
     if not run_claude:
         print("Not executing AI request...")
         return
 
-    # Check for uncommitted git changes
+    # Check for git changes unless forced
     if not force and has_uncommitted_changes():
         print("ERROR: You have uncommitted changes in your git repository.")
         print("Please commit or stash your changes before running this script.")
         sys.exit(1)
-    
-    if WEBSEARCH:
-        print("WEBSEARCH active!")
 
-    client = Anthropic(api_key=ANTHROPIC["API_KEY"])
     print("Sending request to Claude...")
-
-    # Enable streaming
-    response = client.messages.create(
-        model=ANTHROPIC["CLAUDE_MODEL"],
-        max_tokens=int(ANTHROPIC["MAX_TOKENS"]),
-        temperature=1,
+    result = prompt_claude(
+        client=Anthropic(api_key=ANTHROPIC["API_KEY"]),
+        model=ANTHROPIC.get("CLAUDE_MODEL", ""),
         system=SYSTEM,
-        messages=[
-            {"role": "user", "content": message_content}
-        ],
-        tools=[{"name": "web_search", "type": "web_search_20250305", "max_uses": WEBSEARCH_MAX_RESULTS}] if WEBSEARCH else [],
-        thinking={
-            "type": "enabled",
-            "budget_tokens": int(ANTHROPIC["MAX_TOKENS_THINK"]),
-        },
-        stream=True
+        messages=[{"role": "user", "content": message_content}],
+        max_tokens=int(ANTHROPIC.get("MAX_TOKENS", 2000)),
+        temperature=float(ANTHROPIC.get("TEMPERATURE", 1.0)) if ANTHROPIC.get("TEMPERATURE") is not None else 1.0,
+        websearch=WEBSEARCH,
+        websearch_max_results=WEBSEARCH_MAX_RESULTS,
+        thinking_budget=int(ANTHROPIC.get("MAX_TOKENS_THINK", 0)),
+        stream=True,
+        recv_path=os.path.join(output_dir, "clauderesponse-recv.md"),
     )
-    
-    print("\nClaude's response:")
 
-    # Ensure clauderesponse-recv.md is empty before streaming
-    recv_path = os.path.join(output_dir, "clauderesponse-recv.md")
-    with open(recv_path, "w", encoding="utf-8") as f:
-        f.write("")
-
-    # Stream and accumulate the response with proper handling for thinking and content
-    data_response = ""
-    thinking_content = ""
-    raw_data = []
-
-    # Helper to pretty-print a web-search log entry to terminal
-    def _print_websearch_entry(entry):
-        # entry is expected to be a dict with keys: title, url, citation_text, page_age, source, optionally result_index
-        print("\n--- WEBSEARCH HIT ---")
-        title = entry.get("title") or "(title not found)"
-        url = entry.get("url") or "(no url)"
-        citation = entry.get("cited_text") or "(citation text not found)"
-        page_age = entry.get("page_age") or "(page age not found)"
-        src = entry.get("source") or "(source unknown)"
-        idx = entry.get("result_index")
-        if idx is not None:
-            print(f"[result ID {idx}]")
-            print(f"Title       : {title}")
-            print(f"URL         : {url}")
-            print(f"Citation    : {citation}")
-            print(f"Page age    : {page_age}")
-            print(f"Source      : {src}")
-            print("---------------------\n")
-
-    # Stream events
-    for event in response:
-        # Keep original raw_data capture behavior
-        try:
-            raw_data.append({
-                'type': event.type,
-                'event': str(event)
-            })
-        except Exception:
-            # best-effort: if event can't be stringified, still continue
-            try:
-                raw_data.append({'type': getattr(event, 'type', '(unknown)'), 'event': repr(event)})
-            except Exception:
-                raw_data.append({'type': '(unknown)', 'event': '(unserializable event)'})
-
-        try:
-            # content_block_delta: text / thinking / citations
-            if event.type == "content_block_delta":
-                if hasattr(event, 'delta') and hasattr(event.delta, 'type'):
-                    d_type = getattr(event.delta, 'type', None)
-
-                    if d_type == 'thinking_delta':
-                        thinking_chunk = getattr(event.delta, 'thinking', '')
-                        thinking_content += thinking_chunk
-
-                    elif d_type == 'text_delta':
-                        chunk = getattr(event.delta, 'text', '')
-                        # print stream to terminal (keeps previous behavior)
-                        print(chunk, end="", flush=True)
-                        data_response += chunk
-
-                        # append to recv file for recording the streamed response
-                        try:
-                            with open(recv_path, "a", encoding="utf-8") as f:
-                                f.write(chunk)
-                        except Exception as e:
-                            print(f"\n[Warning] Failed to append chunk to {recv_path}: {e}")
-
-                    elif d_type == 'citations_delta':
-                        # citation may be a single object or list
-                        citation_obj = getattr(event.delta, 'citation', None)
-                        citation_list = citation_obj if isinstance(citation_obj, (list, tuple)) else [citation_obj] if citation_obj is not None else []
-                        for cit in citation_list:
-                            try:
-                                cited_text = getattr(cit, 'cited_text', None) or ""
-                                title = getattr(cit, 'title', None) or ""
-                                url = getattr(cit, 'url', None) or ""
-                                page_age = getattr(cit, 'page_age', None) or None
-                                entry = {
-                                    "title": title,
-                                    "url": url,
-                                    "citation_text": cited_text,
-                                    "page_age": page_age,
-                                    "source": "citation_delta"
-                                }
-                                # Print directly to terminal (no file logging)
-                                _print_websearch_entry(entry)
-                            except Exception as e:
-                                print(f"\n[DEBUG] Failed to parse/print citation delta: {e}")
-
-                    else:
-                        # Unhandled event types - print debug
-                        print(f"\n[DEBUG: Unhandled event type '{event.type}']")
-                else:
-                    print(f"\n[DEBUG: Unexpected delta structure in {event.type}]")
-
-            # content_block_start: may carry a server tool use block (web_search results)
-            elif event.type == "content_block_start":
-                cb = getattr(event, 'content_block', None)
-                if cb is None:
-                    continue
-
-                # Try to extract a list of results from likely attributes
-                content_items = getattr(cb, 'content', None) or getattr(cb, 'results', None) or getattr(cb, 'content_items', None)
-
-                # If content_items is iterable, iterate and print each
-                if isinstance(content_items, (list, tuple)):
-                    for idx, item in enumerate(content_items):
-                        try:
-                            title = getattr(item, 'title', None) or ""
-                            url = getattr(item, 'url', None) or ""
-                            page_age = getattr(item, 'page_age', None) or None
-                            # try common snippet attributes
-                            snippet = getattr(item, 'snippet', None) or getattr(item, 'excerpt', None) or getattr(item, 'cited_text', None) or ""
-                            entry = {
-                                "title": title,
-                                "url": url,
-                                "citation_text": snippet,
-                                "page_age": page_age,
-                                "source": "web_search_result",
-                                "result_index": idx
-                            }
-                            _print_websearch_entry(entry)
-                        except Exception as e:
-                            print(f"\n[DEBUG] Failed to parse/print web_search result item: {e}")
-                else:
-                    # If not iterable, try to read top-level metadata and print
-                    try:
-                        title = getattr(cb, 'title', "") or ""
-                        url = getattr(cb, 'url', "") or ""
-                        page_age = getattr(cb, 'page_age', None) or None
-                        snippet = getattr(cb, 'snippet', "") or ""
-                        if any([title, url, snippet, page_age]):
-                            entry = {
-                                "title": title,
-                                "url": url,
-                                "citation_text": snippet,
-                                "page_age": page_age,
-                                "source": "web_search_result_unstructured"
-                            }
-                            _print_websearch_entry(entry)
-                    except Exception:
-                        # Unhandled event types - print debug
-                        print(f"\n[DEBUG: Unhandled event type '{event.type}']")
-
-            elif event.type == "content_block_stop":
-                # no-op
-                pass
-
-            elif event.type == "message_start":
-                print(f"\n[Message Start Event Data]: {event}")
-
-            elif event.type == "message_stop":
-                print(f"\n[Message Stop Event Data]: {event}")
-                # stop streaming loop on message_stop
-                break
-
-            elif event.type == "thinking_block_start":
-                print("\n[Claude is thinking...]")
-
-            elif event.type == "message_delta":
-                # usually metadata/usage info - ignore
-                pass
-
-            else:
-                # Unhandled event types - print debug
-                print(f"\n[DEBUG: Unhandled event type '{event.type}']")
-
-        except AttributeError as e:
-            print(f"\n[ERROR: AttributeError for event type '{getattr(event,'type',str(event))}': {e}]")
-            print(f"[Event details: {event}]")
-            continue
-        except Exception as e:
-            # Catch-all so a malformed event doesn't stop the stream
-            print(f"\n[ERROR: Unexpected error while processing event '{getattr(event,'type',str(event))}': {type(e).__name__}: {e}]")
-            continue
-
-    # Save all data to output directory
-    if thinking_content.strip():
-        export_md_file(thinking_content, "thinking.md")
-        print(f"\n[Claude processed {len(thinking_content)} characters of internal reasoning]")
-        
-    if raw_data:
-        raw_data_str = "\n\n".join([f"Event Type: {item['type']}\nData: {item['event']}" for item in raw_data])
-        export_md_file(raw_data_str, "rawdata.md")
-        print(f"[Saved {len(raw_data)} raw events to file]")
-
-    # Process the accumulated response
-    if data_response.strip():
-        print(f"\nProcessing Claude's response...")
-        write_or_warn_from_claude_output(data_response, original_source_abs_file_paths)
-    else:
+    if result["status"] == "ok":
+        print("\nProcessing Claude's response...")
+        claude_data_to_file(result["data_response"], original_source_abs_file_paths)
+        # Save thinking and raw_data files if present
+        if result.get("thinking_content"):
+            export_md_file(result["thinking_content"], "thinking.md")
+            print(f"\n[Saved thinking content ({len(result['thinking_content'])} chars)]")
+        if result.get("raw_data"):
+            raw_data_str = "\n\n".join([f"Event Type: {item['type']}\nData: {item['event']}" for item in result["raw_data"]])
+            export_md_file(raw_data_str, "rawdata.md")
+            print(f"[Saved {len(result['raw_data'])} raw events to file]")
+    elif result["status"] == "no_response":
         print("\nNo response received from Claude.")
-    
-    # log prompt for history tracking
+    else:
+        print(f"\nError calling Claude: {result.get('error')}")
+
+    # Log prompt for history tracking
     log_prompt(PROMPT)
 
 
