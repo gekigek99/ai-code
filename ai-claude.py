@@ -9,6 +9,7 @@ import subprocess
 import yaml
 import fnmatch
 import fitz
+import shutil
 from typing import List, Any, Optional, Set, Tuple, Dict
 from dataclasses import dataclass, asdict
 import pyperclip
@@ -30,28 +31,39 @@ SYSTEM = config.get("system") + """
 
 # ----- file output patterns ----- #
 
-If a file should be deleted, write:
-+++++ ./path/to/file.ext [DELETE] +++++
-  (no content needed)
-+++++
-
 If you want to create or overwrite a file, return the full updated code in this format:
 +++++ ./path/to/file.ext +++++
   <new content>
++++++
+
+If you want to move or rename a file, write:
++++++ ./path/to/old/file.ext [MOVE] ./path/to/new/file.ext +++++
+  (don't write data, no content needed)
++++++
+
+If a file should be deleted, write:
++++++ ./path/to/file.ext [DELETE] +++++
+  (don't write data, no content needed)
 +++++
 
 Do not use  ``` blocks.
 Output only updated, new, or deleted files.
 """
 
-# Regex: match "+++++ filename [TAG] +++++" ... content ... "+++++"
+# Regex: match "+++++ filename [TAG] [destination] +++++" ... content ... "+++++"
+# Groups:
+#   1 = source filename
+#   2 = optional TAG (DELETE, MOVE, etc.)
+#   3 = optional destination path (used with MOVE)
+#   4 = content block
 block_pattern = re.compile(
-    r'^\+\+\+\+\+\s*'          # opening +++++
-    r'(.+?)'                   # group(1) = filename
-    r'(?:\s*\[([A-Z]+)\])?'    # optional group(2) = TAG (DELETE, UPDATE, etc.)
-    r'\s*\+\+\+\+\+\s*\n'      # end of header line
-    r'(.*?)'                   # group(3) = content (non-greedy)
-    r'^\+\+\+\+\+$',           # closing +++++
+    r'^\+\+\+\+\+\s*'              # opening +++++
+    r'(.+?)'                       # group(1) = source filename (non-greedy)
+    r'(?:\s*\[([A-Z]+)\])?'        # optional group(2) = TAG (DELETE, MOVE, etc.)
+    r'(?:\s+(.+?))?'               # optional group(3) = destination path (for MOVE)
+    r'\s*\+\+\+\+\+\s*\n'          # end of header line
+    r'(.*?)'                       # group(4) = content (non-greedy)
+    r'^\+\+\+\+\+$',               # closing +++++
     re.MULTILINE | re.DOTALL
 )
 
@@ -91,6 +103,7 @@ class FileData:
 # ANSI color codes
 COLOR_YELLOW = "\033[33m"
 COLOR_BLUE = "\033[34m"
+COLOR_CYAN = "\033[36m"
 COLOR_RESET = "\033[0m"
 
 
@@ -583,106 +596,183 @@ def log_prompt(content):
         _warn(f"Warning: Could not write to log file: {e}")
 
 def claude_data_to_file(text_data: str, abs_file_paths: Optional[Set[str]] = None):
-    """Process Claude's response data and write or delete files"""
+    """Process Claude's response data and write, move or delete files"""
     if abs_file_paths is None:
         abs_file_paths = set()
 
+    # block_pattern now returns 4 groups: (source_path, tag, destination, content)
     matches = block_pattern.findall(text_data)
     
     files_written = 0
     files_deleted = 0
+    files_moved = 0
 
-    # We'll accumulate printed summary lines and also detailed entries
-    detailed_entries = []  # tuples: (action, file_name, abs_target, existed_before, in_original)
+    # Accumulate detailed entries: (action, source, destination_or_none, existed_before, in_original)
+    detailed_entries: List[Tuple[str, str, Optional[str], bool, bool]] = []
 
-    for file_name, tag, content_block in matches:
-        abs_target = os.path.normcase(os.path.abspath(file_name))
-        if tag == "DELETE":
-            # Delete the file if it exists
-            existed_before = os.path.exists(file_name)
-            if existed_before:
-                try:
-                    os.remove(file_name)
-                    files_deleted += 1
-                    # Print deletion line; if file was not in original source, print in yellow
-                    if abs_target not in abs_file_paths:
-                        print(f"{COLOR_YELLOW}File deleted: {file_name}{COLOR_RESET}")
-                    else:
-                        print(f"File deleted: {file_name}")
-                except Exception as e:
-                    print(f"Error deleting {file_name}: {e}")
-            else:
-                print(f"File not found (for deletion): {file_name}")
-
-            # Record in detailed entries for summary
-            in_original = abs_target in abs_file_paths
-            detailed_entries.append(("DELETE", file_name, abs_target, existed_before, in_original))
-            continue
-
+    for source_path, tag, destination, content_block in matches:
+        # Strip whitespace from captured groups
+        source_path = source_path.strip()
+        tag = tag.strip() if tag else ""
+        destination = destination.strip() if destination else ""
         content = content_block.strip()
 
-        # Determine if file existed before writing
-        existed_before = os.path.exists(file_name)
+        abs_source = os.path.normcase(os.path.abspath(source_path))
+        in_original = abs_source in abs_file_paths
+        existed_before = os.path.exists(source_path)
+
+        # ==================== DELETE ====================
+        if tag == "DELETE":
+            if existed_before:
+                try:
+                    os.remove(source_path)
+                    files_deleted += 1
+                    # Print deletion line; warn if file was not in original source
+                    if not in_original:
+                        print(f"{COLOR_YELLOW}File deleted: {source_path}{COLOR_RESET}")
+                    else:
+                        print(f"File deleted: {source_path}")
+                except Exception as e:
+                    print(f"Error deleting {source_path}: {e}")
+            else:
+                print(f"File not found (for deletion): {source_path}")
+
+            detailed_entries.append(("DELETE", source_path, None, existed_before, in_original))
+            continue
+
+        # ==================== MOVE ====================
+        if tag == "MOVE":
+            if not destination:
+                print(f"Error: MOVE command for {source_path} missing destination path")
+                detailed_entries.append(("MOVE_ERROR", source_path, None, existed_before, in_original))
+                continue
+
+            abs_dest = os.path.normcase(os.path.abspath(destination))
+            dest_existed_before = os.path.exists(destination)
+
+            if not existed_before:
+                print(f"File not found (for move): {source_path}")
+                detailed_entries.append(("MOVE_ERROR", source_path, destination, False, in_original))
+                continue
+
+            # Ensure destination directory exists
+            dest_dir = os.path.dirname(destination) or '.'
+            try:
+                os.makedirs(dest_dir, exist_ok=True)
+            except Exception as e:
+                print(f"Error creating directory {dest_dir} for move: {e}")
+                detailed_entries.append(("MOVE_ERROR", source_path, destination, existed_before, in_original))
+                continue
+
+            try:
+                # Use shutil.move for cross-filesystem compatibility
+                shutil.move(source_path, destination)
+                files_moved += 1
+
+                # Determine color/message for move operation
+                # Cyan for moves as they are a distinct operation
+                if not in_original:
+                    # Source wasn't in original tracked files - warn
+                    print(f"{COLOR_YELLOW}File moved: {source_path} -> {destination}{COLOR_RESET}")
+                else:
+                    print(f"{COLOR_CYAN}File moved: {source_path} -> {destination}{COLOR_RESET}")
+
+            except Exception as e:
+                print(f"Error moving {source_path} to {destination}: {e}")
+                detailed_entries.append(("MOVE_ERROR", source_path, destination, existed_before, in_original))
+                continue
+
+            detailed_entries.append(("MOVE", source_path, destination, existed_before, in_original))
+            continue
+
+        # ==================== WRITE (default) ====================
+        # Any block without DELETE or MOVE tag is a write operation
 
         # Ensure directory exists (or use '.' for top-level files)
-        target_dir = os.path.dirname(file_name) or '.'
-        os.makedirs(target_dir, exist_ok=True)
+        target_dir = os.path.dirname(source_path) or '.'
+        try:
+            os.makedirs(target_dir, exist_ok=True)
+        except Exception as e:
+            print(f"Error creating directory {target_dir}: {e}")
+            detailed_entries.append(("WRITE_ERROR", source_path, None, existed_before, in_original))
+            continue
 
         try:
-            with open(file_name, 'w', encoding='utf-8') as f:
+            with open(source_path, 'w', encoding='utf-8') as f:
                 f.write(content + '\n')
             files_written += 1
 
             # Decide how to print the immediate "File written" line
-            in_original = abs_target in abs_file_paths
             if not existed_before:
                 # NEW file -> print in blue
-                print(f"{COLOR_BLUE}File written: {file_name}{COLOR_RESET}")
+                print(f"{COLOR_BLUE}File written: {source_path}{COLOR_RESET}")
             else:
                 # Existed before
                 if in_original:
-                    # a normal update
-                    print(f"File written: {file_name}")
+                    # A normal update
+                    print(f"File written: {source_path}")
                 else:
                     # Updated but not in original source -> warning (yellow)
-                    print(f"{COLOR_YELLOW}File written: {file_name}{COLOR_RESET}")
+                    print(f"{COLOR_YELLOW}File written: {source_path}{COLOR_RESET}")
 
         except Exception as e:
-            print(f"Error writing {file_name}: {e}")
+            print(f"Error writing {source_path}: {e}")
+            detailed_entries.append(("WRITE_ERROR", source_path, None, existed_before, in_original))
+            continue
 
-        # Record in detailed entries for summary
-        in_original = abs_target in abs_file_paths
-        detailed_entries.append(("WRITE", file_name, abs_target, existed_before, in_original))
+        detailed_entries.append(("WRITE", source_path, None, existed_before, in_original))
 
-    # Build and print the summary section with categorized tags
+    # ==================== SUMMARY ====================
     print("\nSummary:")
-    print(f" {files_written} file(s) written, {files_deleted} file(s) deleted.")
+    print(f" {files_written} file(s) written, {files_deleted} file(s) deleted, {files_moved} file(s) moved.")
 
     if detailed_entries:
         print("\nDetailed changes:")
-        for action, fname, abs_path, existed_before, in_original in detailed_entries:
+        for entry in detailed_entries:
+            action, source, dest, existed_before, in_original = entry
             tag = ""
             line = ""
+
             if action == "DELETE":
                 if in_original:
                     tag = "[DELETED]"
-                    line = f"{fname} {tag}"
+                    line = f"{source} {tag}"
                 else:
                     tag = "[DELETED - WARNING, not in source]"
-                    line = f"{COLOR_YELLOW}{fname} {tag}{COLOR_RESET}"
+                    line = f"{COLOR_YELLOW}{source} {tag}{COLOR_RESET}"
+
+            elif action == "MOVE":
+                if in_original:
+                    tag = "[MOVED]"
+                    line = f"{COLOR_CYAN}{source} -> {dest} {tag}{COLOR_RESET}"
+                else:
+                    tag = "[MOVED - WARNING, source not in original]"
+                    line = f"{COLOR_YELLOW}{source} -> {dest} {tag}{COLOR_RESET}"
+
+            elif action == "MOVE_ERROR":
+                tag = "[MOVE FAILED]"
+                dest_str = f" -> {dest}" if dest else ""
+                line = f"{COLOR_YELLOW}{source}{dest_str} {tag}{COLOR_RESET}"
+
             elif action == "WRITE":
                 if not existed_before:
                     tag = "[NEW]"
-                    line = f"{COLOR_BLUE}{fname} {tag}{COLOR_RESET}"
+                    line = f"{COLOR_BLUE}{source} {tag}{COLOR_RESET}"
                 else:
                     if in_original:
                         tag = "[UPDATED]"
-                        line = f"{fname} {tag}"
+                        line = f"{source} {tag}"
                     else:
                         tag = "[UPDATED - WARNING, not in source]"
-                        line = f"{COLOR_YELLOW}{fname} {tag}{COLOR_RESET}"
+                        line = f"{COLOR_YELLOW}{source} {tag}{COLOR_RESET}"
+
+            elif action == "WRITE_ERROR":
+                tag = "[WRITE FAILED]"
+                line = f"{COLOR_YELLOW}{source} {tag}{COLOR_RESET}"
+
             else:
-                line = f"{fname} [UNKNOWN ACTION]"
+                line = f"{source} [UNKNOWN ACTION: {action}]"
+
             print(f" - {line}")
 
 
@@ -1116,8 +1206,8 @@ def main():
         if gen_result["status"] == "ok":
             matches = block_pattern.findall(gen_result["data_response"])
 
-            for file_name, tag, content_block in matches:
-                if "source.md" in file_name:
+            for source_path, tag, destination, content_block in matches:
+                if "source.md" in source_path:
                     pyperclip.copy(content_block)
                     print("\n[Copied generated source to clipboard!]")
 
