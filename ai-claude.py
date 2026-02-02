@@ -32,8 +32,8 @@ SYSTEM = config.get("system") + """
 # ----- file output patterns ----- #
 
 If you want to create or overwrite a file, return the full updated code in this format:
-+++++ ./path/to/file.ext +++++
-  <new content>
++++++ ./path/to/file.ext [EDIT] +++++
+  <complete contents of the file after changes>
 +++++
 
 If you want to move or rename a file, write:
@@ -57,13 +57,14 @@ Output only updated, new, or deleted files.
 #   3 = optional destination path (used with MOVE)
 #   4 = content block
 block_pattern = re.compile(
-    r'^\+\+\+\+\+\s*'              # opening +++++
-    r'(.+?)'                       # group(1) = source filename (non-greedy)
-    r'(?:\s*\[([A-Z]+)\])?'        # optional group(2) = TAG (DELETE, MOVE, etc.)
-    r'(?:\s+(.+?))?'               # optional group(3) = destination path (for MOVE)
-    r'\s*\+\+\+\+\+\s*\n'          # end of header line
-    r'(.*?)'                       # group(4) = content (non-greedy)
-    r'^\+\+\+\+\+$',               # closing +++++
+    r'^'
+    r'\+\+\+\+\+\s*'                          # opening +++++
+    r'(?P<source>.+?)'                        # source path
+    r'(?:\s*\[(?P<tag>EDIT|DELETE)\])?'       # optional EDIT or DELETE
+    r'(?:\s*\[(?P<move>MOVE)\]\s+(?P<dest>.+?))?'  # optional MOVE with destination
+    r'\s*\+\+\+\+\+\s*\n'                     # end header
+    r'(?P<content>.*?)'                       # content
+    r'^\+\+\+\+\+$',                          # closing +++++
     re.MULTILINE | re.DOTALL
 )
 
@@ -614,12 +615,11 @@ def claude_data_to_file(text_data: str, abs_file_paths: Optional[Set[str]] = Non
     # Accumulate detailed entries: (action, source, destination_or_none, existed_before, in_original)
     detailed_entries: List[Tuple[str, str, Optional[str], bool, bool]] = []
 
-    for source_path, tag, destination, content_block in matches:
-        # Strip whitespace from captured groups
-        source_path = source_path.strip()
-        tag = tag.strip() if tag else ""
-        destination = destination.strip() if destination else ""
-        content = content_block.strip()
+    for m in block_pattern.finditer(text_data):
+        source_path = m.group("source").strip()
+        tag = (m.group("tag") or m.group("move") or "").strip()
+        destination = (m.group("dest") or "").strip()
+        content = m.group("content").strip()
 
         abs_source = os.path.normcase(os.path.abspath(source_path))
         in_original = abs_source in abs_file_paths
