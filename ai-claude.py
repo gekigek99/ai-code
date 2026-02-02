@@ -101,10 +101,11 @@ class FileData:
     ai_data_tokens: int
 
 # ANSI color codes
+COLOR_RED    = "\033[38;5;88m"
 COLOR_YELLOW = "\033[33m"
-COLOR_BLUE = "\033[34m"
-COLOR_CYAN = "\033[36m"
-COLOR_RESET = "\033[0m"
+COLOR_BLUE   = "\033[34m"
+COLOR_CYAN   = "\033[36m"
+COLOR_RESET  = "\033[0m"
 
 
 def _warn(msg: str):
@@ -597,6 +598,9 @@ def log_prompt(content):
 
 def claude_data_to_file(text_data: str, abs_file_paths: Optional[Set[str]] = None):
     """Process Claude's response data and write, move or delete files"""
+
+    print("Applying changes to disk...")
+    
     if abs_file_paths is None:
         abs_file_paths = set()
 
@@ -627,11 +631,6 @@ def claude_data_to_file(text_data: str, abs_file_paths: Optional[Set[str]] = Non
                 try:
                     os.remove(source_path)
                     files_deleted += 1
-                    # Print deletion line; warn if file was not in original source
-                    if not in_original:
-                        print(f"{COLOR_YELLOW}File deleted: {source_path}{COLOR_RESET}")
-                    else:
-                        print(f"File deleted: {source_path}")
                 except Exception as e:
                     print(f"Error deleting {source_path}: {e}")
             else:
@@ -669,14 +668,6 @@ def claude_data_to_file(text_data: str, abs_file_paths: Optional[Set[str]] = Non
                 shutil.move(source_path, destination)
                 files_moved += 1
 
-                # Determine color/message for move operation
-                # Cyan for moves as they are a distinct operation
-                if not in_original:
-                    # Source wasn't in original tracked files - warn
-                    print(f"{COLOR_YELLOW}File moved: {source_path} -> {destination}{COLOR_RESET}")
-                else:
-                    print(f"{COLOR_CYAN}File moved: {source_path} -> {destination}{COLOR_RESET}")
-
             except Exception as e:
                 print(f"Error moving {source_path} to {destination}: {e}")
                 detailed_entries.append(("MOVE_ERROR", source_path, destination, existed_before, in_original))
@@ -702,19 +693,6 @@ def claude_data_to_file(text_data: str, abs_file_paths: Optional[Set[str]] = Non
                 f.write(content + '\n')
             files_written += 1
 
-            # Decide how to print the immediate "File written" line
-            if not existed_before:
-                # NEW file -> print in blue
-                print(f"{COLOR_BLUE}File written: {source_path}{COLOR_RESET}")
-            else:
-                # Existed before
-                if in_original:
-                    # A normal update
-                    print(f"File written: {source_path}")
-                else:
-                    # Updated but not in original source -> warning (yellow)
-                    print(f"{COLOR_YELLOW}File written: {source_path}{COLOR_RESET}")
-
         except Exception as e:
             print(f"Error writing {source_path}: {e}")
             detailed_entries.append(("WRITE_ERROR", source_path, None, existed_before, in_original))
@@ -722,12 +700,13 @@ def claude_data_to_file(text_data: str, abs_file_paths: Optional[Set[str]] = Non
 
         detailed_entries.append(("WRITE", source_path, None, existed_before, in_original))
 
-    # ==================== SUMMARY ====================
-    print("\nSummary:")
+    # ==================== REPORT ====================
+
+    print("\nReport:")
     print(f" {files_written} file(s) written, {files_deleted} file(s) deleted, {files_moved} file(s) moved.")
 
     if detailed_entries:
-        print("\nDetailed changes:")
+        print("\nReport (detailed):")
         for entry in detailed_entries:
             action, source, dest, existed_before, in_original = entry
             tag = ""
@@ -736,7 +715,7 @@ def claude_data_to_file(text_data: str, abs_file_paths: Optional[Set[str]] = Non
             if action == "DELETE":
                 if in_original:
                     tag = "[DELETED]"
-                    line = f"{source} {tag}"
+                    line = f"{COLOR_RED}{source} {tag}{COLOR_RESET}"
                 else:
                     tag = "[DELETED - WARNING, not in source]"
                     line = f"{COLOR_YELLOW}{source} {tag}{COLOR_RESET}"
