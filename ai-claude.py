@@ -1183,11 +1183,14 @@ def main():
         export_md_file(f"{SYSTEM}\n\n{gen_source_message_content}", "message_content.md")
 
         if gen_result["status"] == "ok":
-            matches = block_pattern.findall(gen_result["data_response"])
+            for m in block_pattern.finditer(gen_result["data_response"]):
+                source_path = m.group("source").strip()
+                tag = (m.group("tag") or m.group("move") or "").strip()
+                destination = (m.group("dest") or "").strip()
+                content = m.group("content").strip()
 
-            for source_path, tag, destination, content_block in matches:
                 if "source.md" in source_path:
-                    pyperclip.copy(content_block)
+                    pyperclip.copy(content)
                     print("\n[Copied generated source to clipboard!]")
 
             if gen_result.get("data_response"):
