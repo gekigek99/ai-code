@@ -427,9 +427,23 @@ def add_source(files_to_ai: List[FileData], SOURCE, ai_shared_file_types=[]) -> 
 
         else:
             # TEXT FILE
-            with open(abs_path, 'r', encoding='utf-8') as f:
-                file_data_text = f.read()
-            
+            try:
+                with open(abs_path, 'r', encoding='utf-8') as f:
+                    file_data_text = f.read()
+                encoding_used = "utf-8"
+
+            except UnicodeDecodeError:
+                # Fallbacks for Windows / legacy files
+                try:
+                    with open(abs_path, 'r', encoding='cp1252') as f:
+                        file_data_text = f.read()
+                    encoding_used = "cp1252"
+                except UnicodeDecodeError:
+                    # Last-resort: decode with replacement so we never crash
+                    with open(abs_path, 'r', encoding='utf-8', errors='replace') as f:
+                        file_data_text = f.read()
+                    encoding_used = "utf-8 (errors=replace)"
+
             files_to_ai.append(
                 FileData(
                     file_type="text",
@@ -446,9 +460,12 @@ def add_source(files_to_ai: List[FileData], SOURCE, ai_shared_file_types=[]) -> 
                     ai_interpretable=True,
                     ai_data_converted=file_data_text,
                     ai_data_converted_type="str",
-                    ai_data_tokens=len(file_data_text)//4
+                    ai_data_tokens=len(file_data_text) // 4
                 )
             )
+
+            if encoding_used != "utf-8":
+                _warn(f"Decoded {rel_path} using {encoding_used}")
     
     # Return both the collected FileData list and the set of original source paths
     return files_to_ai, abs_file_paths
