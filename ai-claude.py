@@ -27,30 +27,30 @@ SOURCE = config.get("source")
 TREE_DIRS = config.get("tree_dirs") or SOURCE
 EXCLUDE_PATTERNS = config.get("exclude_patterns")
 PROMPT = config.get("prompt")
-SYSTEM = config.get("system") + """
+SYSTEM = config.get("system") + f"""
 
 # ----- file output patterns ----- #
 
 If you want to create or overwrite a file, return the full updated code in this format:
-+++++ ./path/to/file.ext [EDIT] +++++
+{"+"*5} ./path/to/file.ext [EDIT] {"+"*5}
   <complete contents of the file after changes>
-+++++
+{"+"*5}
 
 If you want to move or rename a file, write:
-+++++ ./path/to/old/file.ext [MOVE] ./path/to/new/file.ext +++++
+{"+"*5} ./path/to/old/file.ext [MOVE] ./path/to/new/file.ext {"+"*5}
   (don't write data, no content needed)
-+++++
+{"+"*5}
 
 If a file should be deleted, write:
-+++++ ./path/to/file.ext [DELETE] +++++
+{"+"*5} ./path/to/file.ext [DELETE] {"+"*5}
   (don't write data, no content needed)
-+++++
+{"+"*5}
 
 Do not use  ``` blocks.
 Output only updated, new, or deleted files.
 """
 
-# Regex: match "+++++ filename [TAG] [destination] +++++" ... content ... "+++++"
+# Regex: match """ {"+"*5} filename [TAG] [destination] {"+"*5}" ... content ... " {"+"*5} """
 # Groups:
 #   1 = source filename
 #   2 = optional TAG (DELETE, MOVE, etc.)
@@ -58,13 +58,13 @@ Output only updated, new, or deleted files.
 #   4 = content block
 block_pattern = re.compile(
     r'^'
-    r'\+\+\+\+\+\s*'                          # opening +++++
+    r'\+\+\+\+\+\s*'                          # opening {"+"*5}
     r'(?P<source>.+?)'                        # source path
     r'(?:\s*\[(?P<tag>EDIT|DELETE)\])?'       # optional EDIT or DELETE
     r'(?:\s*\[(?P<move>MOVE)\]\s+(?P<dest>.+?))?'  # optional MOVE with destination
     r'\s*\+\+\+\+\+\s*\n'                     # end header
     r'(?P<content>.*?)'                       # content
-    r'^\+\+\+\+\+$',                          # closing +++++
+    r'^\+\+\+\+\+$',                          # closing {"+"*5}
     re.MULTILINE | re.DOTALL
 )
 
