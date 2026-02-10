@@ -28,22 +28,36 @@ SOURCE = config.get("source")
 TREE_DIRS = config.get("tree_dirs") or SOURCE
 EXCLUDE_PATTERNS = config.get("exclude_patterns")
 PROMPT = config.get("prompt")
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SYSTEM prompt — file-output convention
+# ──────────────────────────────────────────────────────────────────────────────
+# Block format:
+#
+#   {"+"*5} ./path/to/file.ext [TAG]   ← header: opening marker + path + optional tag
+#   <file contents>                    ← body
+#   {"+"*5}                            ← closing marker (standalone line)
+#
+# Because the opening marker and the closing marker are each on their own line
+# starting with {"+"*5}, every well-formed response has an *even* count of lines
+# that begin with {"+"*5} — exactly 2 per block.
+# ──────────────────────────────────────────────────────────────────────────────
 SYSTEM = config.get("system") + f"""
 
 # ----- file output patterns ----- #
 
 If you want to create or overwrite a file, return the full updated code in this format:
-{"+"*5} ./path/to/file.ext [EDIT] {"+"*5}
+{"+"*5} ./path/to/file.ext [EDIT]
   <complete contents of the file after changes>
 {"+"*5}
 
 If you want to move or rename a file, write:
-{"+"*5} ./path/to/old/file.ext [MOVE] ./path/to/new/file.ext {"+"*5}
+{"+"*5} ./path/to/old/file.ext [MOVE] ./path/to/new/file.ext
   (don't write data, no content needed)
 {"+"*5}
 
 If a file should be deleted, write:
-{"+"*5} ./path/to/file.ext [DELETE] {"+"*5}
+{"+"*5} ./path/to/file.ext [DELETE]
   (don't write data, no content needed)
 {"+"*5}
 
@@ -51,22 +65,29 @@ Do not use  ``` blocks.
 Output only updated, new, or deleted files.
 """
 
-# Regex: match """ {"+"*5} filename [TAG] [destination] {"+"*5}" ... content ... " {"+"*5} """
-# Groups:
-#   source = source filename
-#   tag    = optional TAG (EDIT, DELETE)
-#   move   = literal "MOVE" when present
-#   dest   = optional destination path (used with MOVE)
-#   content = content block between header and closing marker
+# ──────────────────────────────────────────────────────────────────────────────
+# Block-detection regex
+# ──────────────────────────────────────────────────────────────────────────────
+# Header line:  {"+"*5}<space(s)><source_path> [optional TAG] [optional MOVE dest]<newline>
+# Body:         anything (non-greedy)
+# Closing line: {"+"*5} (exactly, at start of line, nothing else)
+#
+# Named groups:
+#   source  – source file path
+#   tag     – EDIT | DELETE (optional)
+#   move    – literal "MOVE" when present
+#   dest    – destination path for MOVE (optional)
+#   content – everything between the header and the closing marker
+# ──────────────────────────────────────────────────────────────────────────────
 block_pattern = re.compile(
     r'^'
-    r'\+\+\+\+\+\s*'                          # opening {"+"*5}
-    r'(?P<source>.+?)'                        # source path
-    r'(?:\s*\[(?P<tag>EDIT|DELETE)\])?'       # optional EDIT or DELETE
-    r'(?:\s*\[(?P<move>MOVE)\]\s+(?P<dest>.+?))?'  # optional MOVE with destination
-    r'\s*\+\+\+\+\+\s*\n'                     # end header
-    r'(?P<content>.*?)'                       # content
-    r'^\+\+\+\+\+$',                          # closing {"+"*5}
+    r'\+{5}\s+'                                # opening {"+"*5} followed by at least one whitespace
+    r'(?P<source>.+?)'                         # source path (non-greedy)
+    r'(?:\s*\[(?P<tag>EDIT|DELETE)\])?'        # optional [EDIT] or [DELETE]
+    r'(?:\s*\[(?P<move>MOVE)\]\s+(?P<dest>.+?))?'  # optional [MOVE] + destination path
+    r'\s*\n'                                   # end of header — just a newline
+    r'(?P<content>.*?)'                        # content block (non-greedy, DOTALL)
+    r'^\+{5}$',                                # closing {"+"*5} on its own line
     re.MULTILINE | re.DOTALL
 )
 
@@ -622,18 +643,23 @@ def validate_claude_response(text_data: str) -> bool:
     """
     Validate structural integrity of Claude's response before applying file operations.
 
+    Block format (new convention — header has NO trailing {"+"*5}):
+        {"+"*5} ./path [TAG]       ← line starts with {"+"*5}  (header)
+        <content>
+        {"+"*5}                    ← line starts with {"+"*5}  (closing)
+
     Checks performed:
-      1. {"+"*5} marker lines come in even count (each block needs an opening header
-         line and a closing marker line, so total lines starting with {"+"*5} must be even).
+      1. Lines beginning with {"+"*5} must come in an even count.
+         Each block contributes exactly 2 such lines (one header, one closing),
+         so an odd total means at least one block is malformed.
       2. Data outside matched blocks is less than 3 % of total response length.
-         Any significant content outside blocks likely means Claude emitted prose,
-         code fences, or malformed blocks that won't be captured by block_pattern.
+         Significant content outside blocks likely means Claude emitted prose,
+         code fences, or malformed blocks that block_pattern cannot capture.
 
     Returns True if the response passes all checks, False otherwise.
-    All warnings are printed to stdout AND persisted to validation.log.
     """
 
-    # Guard: empty / whitespace-only responses are trivially invalid but handled elsewhere
+    # Guard: empty / whitespace-only responses are trivially invalid
     if not text_data or not text_data.strip():
         msg = "VALIDATION SKIP: Response is empty or whitespace-only."
         _warn(msg)
@@ -642,12 +668,13 @@ def validate_claude_response(text_data: str) -> bool:
     warnings: List[str] = []
     passed = True
 
-    # ---------- Check 1: {"+"*5} marker lines must be even ----------
+    # ── Check 1: {"+"*5} marker lines must be even ──────────────────────────
     # We count every line whose first 5+ characters are '+'.
-    # In a well-formed response each block contributes exactly 2 such lines:
-    #   line A:  {"+"*5} ./path [TAG] {"+"*5}      (opening header – starts with {"+"*5})
-    #   line B:  {"+"*5}                          (closing marker – starts with {"+"*5})
-    # The trailing {"+"*5} on line A is *not* at column 0, so it doesn't add a count.
+    # In the new block format each block contributes exactly 2 such lines:
+    #   line A:  {"+"*5} ./path [TAG]   (header  – starts with {"+"*5})
+    #   line B:  {"+"*5}                (closing – starts with {"+"*5})
+    # No trailing {"+"*5} on the header line means no ambiguity; the count is
+    # truly 2× the number of blocks.
     marker_line_re = re.compile(r'^\+{5,}', re.MULTILINE)
     marker_lines = marker_line_re.findall(text_data)
     marker_count = len(marker_lines)
@@ -659,18 +686,18 @@ def validate_claude_response(text_data: str) -> bool:
     elif marker_count % 2 != 0:
         msg = (
             f"VALIDATION FAIL: {"+"*5} marker line count is ODD ({marker_count}). "
-            f"Expected an even number (2 per block). "
-            f"This means at least one block is missing its opening or closing marker."
+            f"Expected an even number (exactly 2 per block). "
+            f"This means at least one block is missing its header or closing marker."
         )
         warnings.append(msg)
         passed = False
     else:
         # Even and > 0 — good
         block_count_est = marker_count // 2
-        msg = f"VALIDATION OK: {"+"*5} marker lines = {marker_count} (≈ {block_count_est} block(s)), count is even."
+        msg = f"VALIDATION OK: {"+"*5} marker lines = {marker_count} (= {block_count_est} block(s)), count is even."
         print(f"{COLOR_GREEN}{msg}{COLOR_RESET}")
 
-    # ---------- Check 2: percentage of data outside matched blocks < 3 % ----------
+    # ── Check 2: percentage of data outside matched blocks < 3 % ────────────
     total_len = len(text_data)
     # Sum the length of every region matched by block_pattern (includes delimiters + content)
     inside_len = sum(m.end() - m.start() for m in block_pattern.finditer(text_data))
@@ -697,7 +724,6 @@ def validate_claude_response(text_data: str) -> bool:
     OUTSIDE_THRESHOLD_PCT = 3.0
     if outside_pct > OUTSIDE_THRESHOLD_PCT:
         # Build a helpful snippet of what's outside so the user/log can diagnose
-        # Collect up to 500 chars of outside text for the warning
         outside_snippets: List[str] = []
         prev_end = 0
         for m in block_pattern.finditer(text_data):
@@ -727,7 +753,7 @@ def validate_claude_response(text_data: str) -> bool:
         ok_msg = f"VALIDATION OK: Outside-block percentage {outside_pct:.2f}% is within {OUTSIDE_THRESHOLD_PCT:.1f}% threshold."
         print(f"{COLOR_GREEN}{ok_msg}{COLOR_RESET}")
 
-    # ---------- Emit all accumulated warnings ----------
+    # ── Emit all accumulated warnings ────────────────────────────────────────
     if warnings:
         print(f"\n{COLOR_YELLOW}{'='*60}{COLOR_RESET}")
         print(f"{COLOR_YELLOW}  RESPONSE VALIDATION WARNINGS ({len(warnings)}){COLOR_RESET}")
@@ -750,9 +776,6 @@ def claude_data_to_file(text_data: str, abs_file_paths: Optional[Set[str]] = Non
     if abs_file_paths is None:
         abs_file_paths = set()
 
-    # block_pattern now returns 4 groups: (source_path, tag, destination, content)
-    matches = block_pattern.findall(text_data)
-    
     files_written = 0
     files_deleted = 0
     files_moved = 0
