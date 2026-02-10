@@ -14,7 +14,8 @@ from typing import List, Any, Optional, Set, Tuple, Dict
 from dataclasses import dataclass, asdict
 import pyperclip
 
-# python ./ai-code/ai-claude.py -ai
+# for claude auto-update:
+# - never use 5 consecutive "+"" signs, use only {"+"*5}
 
 # Load configuration from YAML
 def load_config():
@@ -52,10 +53,11 @@ Output only updated, new, or deleted files.
 
 # Regex: match """ {"+"*5} filename [TAG] [destination] {"+"*5}" ... content ... " {"+"*5} """
 # Groups:
-#   1 = source filename
-#   2 = optional TAG (DELETE, MOVE, etc.)
-#   3 = optional destination path (used with MOVE)
-#   4 = content block
+#   source = source filename
+#   tag    = optional TAG (EDIT, DELETE)
+#   move   = literal "MOVE" when present
+#   dest   = optional destination path (used with MOVE)
+#   content = content block between header and closing marker
 block_pattern = re.compile(
     r'^'
     r'\+\+\+\+\+\s*'                          # opening {"+"*5}
@@ -106,6 +108,7 @@ COLOR_RED    = "\033[38;5;88m"
 COLOR_YELLOW = "\033[33m"
 COLOR_BLUE   = "\033[34m"
 COLOR_CYAN   = "\033[36m"
+COLOR_GREEN  = "\033[32m"
 COLOR_RESET  = "\033[0m"
 
 
@@ -614,6 +617,131 @@ def log_prompt(content):
     except Exception as e:
         _warn(f"Warning: Could not write to log file: {e}")
 
+
+def validate_claude_response(text_data: str) -> bool:
+    """
+    Validate structural integrity of Claude's response before applying file operations.
+
+    Checks performed:
+      1. {"+"*5} marker lines come in even count (each block needs an opening header
+         line and a closing marker line, so total lines starting with {"+"*5} must be even).
+      2. Data outside matched blocks is less than 3 % of total response length.
+         Any significant content outside blocks likely means Claude emitted prose,
+         code fences, or malformed blocks that won't be captured by block_pattern.
+
+    Returns True if the response passes all checks, False otherwise.
+    All warnings are printed to stdout AND persisted to validation.log.
+    """
+
+    # Guard: empty / whitespace-only responses are trivially invalid but handled elsewhere
+    if not text_data or not text_data.strip():
+        msg = "VALIDATION SKIP: Response is empty or whitespace-only."
+        _warn(msg)
+        return False
+
+    warnings: List[str] = []
+    passed = True
+
+    # ---------- Check 1: {"+"*5} marker lines must be even ----------
+    # We count every line whose first 5+ characters are '+'.
+    # In a well-formed response each block contributes exactly 2 such lines:
+    #   line A:  {"+"*5} ./path [TAG] {"+"*5}      (opening header – starts with {"+"*5})
+    #   line B:  {"+"*5}                          (closing marker – starts with {"+"*5})
+    # The trailing {"+"*5} on line A is *not* at column 0, so it doesn't add a count.
+    marker_line_re = re.compile(r'^\+{5,}', re.MULTILINE)
+    marker_lines = marker_line_re.findall(text_data)
+    marker_count = len(marker_lines)
+
+    if marker_count == 0:
+        msg = f"VALIDATION WARN: No {"+"*5} marker lines found in response – no file blocks detected."
+        warnings.append(msg)
+        passed = False
+    elif marker_count % 2 != 0:
+        msg = (
+            f"VALIDATION FAIL: {"+"*5} marker line count is ODD ({marker_count}). "
+            f"Expected an even number (2 per block). "
+            f"This means at least one block is missing its opening or closing marker."
+        )
+        warnings.append(msg)
+        passed = False
+    else:
+        # Even and > 0 — good
+        block_count_est = marker_count // 2
+        msg = f"VALIDATION OK: {"+"*5} marker lines = {marker_count} (≈ {block_count_est} block(s)), count is even."
+        print(f"{COLOR_GREEN}{msg}{COLOR_RESET}")
+
+    # ---------- Check 2: percentage of data outside matched blocks < 3 % ----------
+    total_len = len(text_data)
+    # Sum the length of every region matched by block_pattern (includes delimiters + content)
+    inside_len = sum(m.end() - m.start() for m in block_pattern.finditer(text_data))
+    outside_len = total_len - inside_len
+
+    if total_len > 0:
+        outside_pct = (outside_len / total_len) * 100.0
+    else:
+        outside_pct = 0.0
+
+    # Count how many complete blocks the regex actually matched
+    matched_blocks = len(list(block_pattern.finditer(text_data)))
+
+    pct_msg = (
+        f"Response length: {total_len} chars | "
+        f"Inside blocks: {inside_len} chars | "
+        f"Outside blocks: {outside_len} chars | "
+        f"Outside percentage: {outside_pct:.2f}% | "
+        f"Matched blocks: {matched_blocks}"
+    )
+    print(pct_msg)
+
+    # Threshold: 3 %
+    OUTSIDE_THRESHOLD_PCT = 3.0
+    if outside_pct > OUTSIDE_THRESHOLD_PCT:
+        # Build a helpful snippet of what's outside so the user/log can diagnose
+        # Collect up to 500 chars of outside text for the warning
+        outside_snippets: List[str] = []
+        prev_end = 0
+        for m in block_pattern.finditer(text_data):
+            gap = text_data[prev_end:m.start()].strip()
+            if gap:
+                outside_snippets.append(gap)
+            prev_end = m.end()
+        # Trailing text after last block
+        trailing = text_data[prev_end:].strip()
+        if trailing:
+            outside_snippets.append(trailing)
+
+        # Truncate the combined snippet for logging readability
+        combined_outside = "\n---\n".join(outside_snippets)
+        if len(combined_outside) > 500:
+            combined_outside = combined_outside[:500] + "... [truncated]"
+
+        msg = (
+            f"VALIDATION FAIL: {outside_pct:.2f}% of response data is outside {"+"*5} blocks "
+            f"(threshold: {OUTSIDE_THRESHOLD_PCT:.1f}%). "
+            f"This likely means Claude emitted prose, explanations, or malformed blocks.\n"
+            f"Outside content preview:\n{combined_outside}"
+        )
+        warnings.append(msg)
+        passed = False
+    else:
+        ok_msg = f"VALIDATION OK: Outside-block percentage {outside_pct:.2f}% is within {OUTSIDE_THRESHOLD_PCT:.1f}% threshold."
+        print(f"{COLOR_GREEN}{ok_msg}{COLOR_RESET}")
+
+    # ---------- Emit all accumulated warnings ----------
+    if warnings:
+        print(f"\n{COLOR_YELLOW}{'='*60}{COLOR_RESET}")
+        print(f"{COLOR_YELLOW}  RESPONSE VALIDATION WARNINGS ({len(warnings)}){COLOR_RESET}")
+        print(f"{COLOR_YELLOW}{'='*60}{COLOR_RESET}")
+        for w in warnings:
+            _warn(w)
+        print(f"{COLOR_YELLOW}{'='*60}{COLOR_RESET}\n")
+    else:
+        summary = "VALIDATION PASSED: All checks OK."
+        print(f"{COLOR_GREEN}{summary}{COLOR_RESET}")
+
+    return passed
+
+
 def claude_data_to_file(text_data: str, abs_file_paths: Optional[Set[str]] = None):
     """Process Claude's response data and write, move or delete files"""
 
@@ -772,12 +900,65 @@ def claude_data_to_file(text_data: str, abs_file_paths: Optional[Set[str]] = Non
             print(f" - {line}")
 
 
+def _resolve_tree_dirs(raw_dirs: List[str]) -> List[str]:
+    """
+    Resolve a list of source entries (which may contain both files and directories)
+    into a deduplicated list of *directory* paths suitable for get_directory_tree().
+
+    - If an entry is an existing directory, keep it as-is.
+    - If an entry is an existing file, replace it with its parent directory.
+    - If an entry does not exist, check if its parent exists and use that;
+      otherwise warn and skip.
+
+    Returns a deduplicated list of absolute directory paths preserving original order.
+    """
+    seen: Set[str] = set()
+    result: List[str] = []
+
+    for entry in raw_dirs:
+        abs_entry = os.path.abspath(entry)
+
+        if os.path.isdir(abs_entry):
+            # Already a directory – use directly
+            norm = os.path.normcase(abs_entry)
+            if norm not in seen:
+                seen.add(norm)
+                result.append(abs_entry)
+
+        elif os.path.isfile(abs_entry):
+            # It's a file – use its parent directory for the tree
+            parent = os.path.dirname(abs_entry)
+            norm = os.path.normcase(parent)
+            if norm not in seen:
+                seen.add(norm)
+                result.append(parent)
+
+        else:
+            # Path doesn't exist – try parent as a fallback
+            parent = os.path.dirname(abs_entry)
+            if os.path.isdir(parent):
+                norm = os.path.normcase(parent)
+                if norm not in seen:
+                    seen.add(norm)
+                    result.append(parent)
+            else:
+                _warn(f"WARNING: tree_dirs entry not found and parent doesn't exist: {entry}")
+
+    return result
+
+
 def get_directory_tree(base_dirs, files_to_ai: List[FileData] = None):
     """
     Build a directory tree for the given base_dirs. If `files_to_ai` contains
     a file path that is being printed, that line will be wrapped in ANSI green
     and will include a token estimate when available.
+
+    base_dirs may contain a mix of file and directory paths; files are resolved
+    to their parent directories automatically via _resolve_tree_dirs().
     """
+
+    # Resolve any file paths to their parent directories so the tree walk works
+    base_dirs = _resolve_tree_dirs(base_dirs)
 
     print("Building directory tree...")
     project_root = os.path.abspath(os.getcwd())
@@ -1170,6 +1351,10 @@ def main():
         with open(md_path, encoding="utf-8") as f:
             data_response = f.read()
         if data_response.strip():
+            # Validate the saved response before applying
+            validation_ok = validate_claude_response(data_response)
+            if not validation_ok:
+                _warn("Validation warnings detected on saved response (see above). Proceeding anyway.")
             claude_data_to_file(data_response, original_source_abs_file_paths)
         else:
             print("Empty clauderesponse file.")
@@ -1200,6 +1385,9 @@ def main():
         export_md_file(f"{SYSTEM}\n\n{gen_source_message_content}", "message_content.md")
 
         if gen_result["status"] == "ok":
+            # Validate gen-source response
+            validate_claude_response(gen_result["data_response"])
+
             for m in block_pattern.finditer(gen_result["data_response"]):
                 source_path = m.group("source").strip()
                 tag = (m.group("tag") or m.group("move") or "").strip()
@@ -1290,6 +1478,16 @@ def main():
     )
 
     if result["status"] == "ok":
+        # ---- Validate response structure before writing anything to disk ----
+        print("\n\nValidating Claude response structure...")
+        validation_ok = validate_claude_response(result["data_response"])
+
+        if not validation_ok:
+            _warn(
+                "Response validation detected issues (see warnings above). "
+                "Proceeding with file application, but review results carefully."
+            )
+
         print("\nApplying Claude's response to disk...")
         claude_data_to_file(result["data_response"], original_source_abs_file_paths)
 
