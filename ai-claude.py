@@ -1707,9 +1707,7 @@ def main():
     print(f"Input tokens [ESTIMATED]: {(len(str(message_content)) + len(str(SYSTEM))) // 4}")
 
     # ── Export assembled prompt / message content for record ──────────────────
-    # The *clean_tree* (human-readable, ANSI-free) is used in the export file
-    # so that the saved prompt is readable and free of escape sequences.
-    export_md_file("\n\n".join([SYSTEM, PROMPT, clean_tree, data_files]), "userfullprompt.md")
+    export_md_file("\n\n".join([SYSTEM, PROMPT, ai_file_listing, data_files]), "userfullprompt.md")
     export_md_file(message_content, "message_content.md")
 
     # If -ai flag not provided, stop here
