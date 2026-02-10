@@ -132,6 +132,26 @@ COLOR_CYAN   = "\033[36m"
 COLOR_GREEN  = "\033[32m"
 COLOR_RESET  = "\033[0m"
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Compiled regex for stripping ANSI escape sequences.
+# Matches all Select Graphic Rendition (SGR) sequences of the form ESC[…m
+# as well as common CSI sequences (cursor movement, erase, etc.).
+# Used to produce clean text for file export and AI payloads that must not
+# contain terminal control characters.
+# ──────────────────────────────────────────────────────────────────────────────
+_ANSI_ESCAPE_RE = re.compile(r'\033\[[0-9;]*[A-Za-z]')
+
+
+def strip_ansi(text: str) -> str:
+    """Remove all ANSI escape sequences from *text* and return plain text.
+
+    This is essential for any string that was built with ANSI colour codes for
+    console display but must later be written to a log file, exported as
+    Markdown, or sent to an LLM where escape codes would be noise / confuse
+    the model.
+    """
+    return _ANSI_ESCAPE_RE.sub('', text)
+
 
 def _warn(msg: str):
     """Print a warning in yellow."""
@@ -388,8 +408,6 @@ def add_source(files_to_ai: List[FileData], SOURCE, ai_shared_file_types=[]) -> 
     print("\nReading files...")  
     
     for abs_path in abs_file_paths:
-        from pathlib import Path
-
         rel_path = f".\\{os.path.relpath(abs_path, os.getcwd())}"
 
         if not os.path.isfile(abs_path):
@@ -970,14 +988,33 @@ def _resolve_tree_dirs(raw_dirs: List[str]) -> List[str]:
     return result
 
 
-def get_directory_tree(base_dirs, files_to_ai: List[FileData] = None):
+def get_directory_tree(base_dirs, files_to_ai: List[FileData] = None) -> Tuple[str, str]:
     """
-    Build a directory tree for the given base_dirs. If `files_to_ai` contains
-    a file path that is being printed, that line will be wrapped in ANSI green
-    and will include a token estimate when available.
+    Build a directory tree for the given base_dirs and return two representations:
 
-    base_dirs may contain a mix of file and directory paths; files are resolved
-    to their parent directories automatically via _resolve_tree_dirs().
+    1. **clean_tree** — a human-readable, indented tree with box-drawing characters,
+       file sizes and token estimates.  ANSI colour codes are stripped so the string
+       is safe for Markdown export, log files, etc.  The ANSI-coloured version is
+       printed directly to the console inside this function.
+
+    2. **ai_file_listing** — a compact, flat list of forward-slash relative paths
+       (e.g. ``./src/main.py``) suitable for sending to an LLM.  This avoids
+       wasting tokens on decorative tree characters that carry no semantic value
+       for the model.
+
+    Parameters
+    ----------
+    base_dirs : list[str]
+        Directories (or files, resolved to parent dirs) whose contents are walked.
+    files_to_ai : list[FileData], optional
+        If provided, files present in this list are highlighted in the console
+        tree and annotated with their estimated token count.
+
+    Returns
+    -------
+    (clean_tree, ai_file_listing) : tuple[str, str]
+        *clean_tree* — ANSI-free, human-readable tree string.
+        *ai_file_listing* — one ``./relative/path`` per line, for LLM consumption.
     """
 
     # Resolve any file paths to their parent directories so the tree walk works
@@ -985,7 +1022,14 @@ def get_directory_tree(base_dirs, files_to_ai: List[FileData] = None):
 
     print("Building directory tree...")
     project_root = os.path.abspath(os.getcwd())
-    output_lines = []
+
+    # We build two parallel line lists:
+    #   display_lines — ANSI-coloured, printed to the terminal
+    #   clean_lines   — identical structure but with no ANSI codes (for export)
+    # Plus a flat list of every file's relative path for the AI listing.
+    display_lines: List[str] = []
+    clean_lines: List[str] = []
+    ai_file_paths: List[str] = []
 
     # Normalize files_to_ai into a dict keyed by normalized absolute path
     files_to_ai = files_to_ai or []
@@ -1013,7 +1057,9 @@ def get_directory_tree(base_dirs, files_to_ai: List[FileData] = None):
         try:
             entries = sorted(os.listdir(path))
         except Exception as e:
-            output_lines.append(f"{prefix}[Error reading {path}]: {e}")
+            err_line = f"{prefix}[Error reading {path}]: {e}"
+            display_lines.append(err_line)
+            clean_lines.append(err_line)
             return
 
         # Filter entries by exclusion rules
@@ -1030,17 +1076,24 @@ def get_directory_tree(base_dirs, files_to_ai: List[FileData] = None):
 
             # Build entry text
             base_name = os.path.basename(abs_path)
-            entry_text = base_name
 
             # Try to get file data from files_to_ai_norm using consistent normalization
             filedata = files_to_ai_norm.get(os.path.normcase(os.path.abspath(abs_path)))
 
             if os.path.isfile(abs_path):
+                # ── Collect relative path for AI listing ─────────────────
+                # Always use forward slashes and "./" prefix for the AI.
+                rel_to_root = "./" + os.path.relpath(abs_path, project_root).replace("\\", "/")
+                ai_file_paths.append(rel_to_root)
+
                 try:
                     file_size = os.path.getsize(abs_path)
                     size_kb = file_size / 1024
                 except Exception:
                     size_kb = 0.0
+
+                # Padding for alignment: pad the filename to 20 chars
+                pad = base_name.ljust(20)[len(base_name):]
 
                 if filedata:
                     # Show token estimate if available
@@ -1049,17 +1102,29 @@ def get_directory_tree(base_dirs, files_to_ai: List[FileData] = None):
                         token_str = "~N/A tokens"
                     else:
                         token_str = f"~{token_est:5.0f} tokens"
-                    # Color files that are in files_to_ai
-                    entry_text = f"\033[32m{base_name} {base_name.ljust(20)[len(base_name):]} [{size_kb:5.1f} KB | {token_str}]\033[0m"
+
+                    # Display (ANSI green) for console
+                    display_entry = (
+                        f"{COLOR_GREEN}{base_name} {pad} "
+                        f"[{size_kb:5.1f} KB | {token_str}]{COLOR_RESET}"
+                    )
+                    # Clean (no ANSI) for export
+                    clean_entry = (
+                        f"{base_name} {pad} "
+                        f"[{size_kb:5.1f} KB | {token_str}]"
+                    )
                 else:
-                    # File not indexed in files_to_ai -> show size only and mark as not indexed
-                    entry_text = f"{base_name} {base_name.ljust(20)[len(base_name):]} [{size_kb:5.1f} KB ]"
+                    # File not indexed in files_to_ai -> show size only
+                    display_entry = f"{base_name} {pad} [{size_kb:5.1f} KB ]"
+                    clean_entry = display_entry
+
+                display_lines.append(f"{prefix}{connector}{display_entry}")
+                clean_lines.append(f"{prefix}{connector}{clean_entry}")
 
             else:
-                # Directories and other non-files: just display name
-                entry_text = entry
-
-            output_lines.append(f"{prefix}{connector}{entry_text}")
+                # Directories: just display name, no colour
+                display_lines.append(f"{prefix}{connector}{entry}")
+                clean_lines.append(f"{prefix}{connector}{entry}")
 
             # Recurse into directories
             if os.path.isdir(abs_path):
@@ -1071,13 +1136,20 @@ def get_directory_tree(base_dirs, files_to_ai: List[FileData] = None):
 
     missing_dirs = [d for d in abs_dirs if not os.path.isdir(d)]
     if missing_dirs:
-        output_lines.append("\nERROR: The following directory(ies) do not exist:")
+        err_header = "\nERROR: The following directory(ies) do not exist:"
+        display_lines.append(err_header)
+        clean_lines.append(err_header)
         for d in missing_dirs:
             rel_path = os.path.relpath(d, start=project_root)
-            output_lines.append(f" - {rel_path}")
-        dir_tree = "\n".join(output_lines)
-        print(dir_tree)
-        return dir_tree
+            err_entry = f" - {rel_path}"
+            display_lines.append(err_entry)
+            clean_lines.append(err_entry)
+
+        display_tree = "\n".join(display_lines)
+        clean_tree = "\n".join(clean_lines)
+        print(display_tree)
+        # Return clean tree and empty AI listing on error
+        return clean_tree, ""
 
     # Remove nested entries so we don't print duplicates
     roots_to_print = []
@@ -1089,12 +1161,26 @@ def get_directory_tree(base_dirs, files_to_ai: List[FileData] = None):
         if is_excluded(root_dir):
             continue
         rel_name = os.path.relpath(root_dir, start=project_root)
-        output_lines.append(f"\nDirectory tree structure for {rel_name}/")
+        header = f"\nDirectory tree structure for {rel_name}/"
+        display_lines.append(header)
+        clean_lines.append(header)
         walk_dir(root_dir, base_dir=root_dir)
 
-    dir_tree = "\n".join(output_lines)
-    print(dir_tree)
-    return dir_tree
+    # ── Console output (ANSI-coloured) ───────────────────────────────────────
+    display_tree = "\n".join(display_lines)
+    print(display_tree)
+
+    # ── Clean tree for export / logging (no ANSI) ────────────────────────────
+    clean_tree = "\n".join(clean_lines)
+
+    # ── Flat AI file listing ─────────────────────────────────────────────────
+    # One relative path per line, suitable for LLM context.  The header line
+    # gives the model a clear label so it knows what the block represents.
+    ai_listing_parts = ["Project file structure:"]
+    ai_listing_parts.extend(ai_file_paths)
+    ai_file_listing = "\n".join(ai_listing_parts)
+
+    return clean_tree, ai_file_listing
 
 
 def has_uncommitted_changes():
@@ -1329,6 +1415,13 @@ def prompt_claude(
 def generate_prompt_for_gen_source(prompt: str, source: Any, tree_str: str) -> List[Dict[str, Any]]:
     """
     Describe in a prompt for claude the expected output for source.
+
+    Parameters
+    ----------
+    tree_str : str
+        The *clean* human-readable tree (no ANSI) — used here because the
+        visual hierarchy helps Claude understand the project layout when
+        generating a new source list.
     """
     try:
         source_yaml = yaml.safe_dump({"source": source}, sort_keys=False, allow_unicode=True)
@@ -1385,11 +1478,19 @@ def main():
 
     # Discover and read sources
     files_to_ai, original_source_abs_file_paths = add_source(files_to_ai, SOURCE, ai_shared_file_types)
-    tree_dirs = get_directory_tree(TREE_DIRS, files_to_ai)
+
+    # ── Build directory tree ─────────────────────────────────────────────────
+    # get_directory_tree() now returns a tuple:
+    #   clean_tree      — human-readable tree (no ANSI) for logging / export
+    #   ai_file_listing — flat "./path/to/file" list for sending to Claude
+    # The ANSI-coloured tree is printed to the console inside the function.
+    clean_tree, ai_file_listing = get_directory_tree(TREE_DIRS, files_to_ai)
 
     if run_gen_source:
         print("Generating adapted-to-prompt source via Claude...")
-        gen_source_message_content = generate_prompt_for_gen_source(PROMPT, SOURCE, tree_dirs)
+        # For gen-source we pass the *clean tree* (visual hierarchy) because
+        # Claude needs the structural overview to generate a good source list.
+        gen_source_message_content = generate_prompt_for_gen_source(PROMPT, SOURCE, clean_tree)
 
         gen_result = prompt_claude(
             client=Anthropic(api_key=ANTHROPIC["API_KEY"]),
@@ -1463,15 +1564,20 @@ def main():
         else:
             print(f"Unexpected file type while building message_content: {file_to_ai.file_type}")
 
-    # Add prompt and directory tree
+    # ── Add prompt and directory structure to the message ─────────────────────
+    # The *ai_file_listing* (flat path list) is sent to Claude instead of the
+    # decorative tree.  This saves tokens and gives the model clean, parseable
+    # paths it can reference directly in its [EDIT] / [DELETE] / [MOVE] blocks.
     message_content.extend([{"type": "text", "text": PROMPT}])
-    message_content.extend([{"type": "text", "text": f"Directory tree structure: {tree_dirs}"}])
+    message_content.extend([{"type": "text", "text": f"Directory tree structure:\n{ai_file_listing}"}])
 
     # Token estimate (approx)
     print(f"Input tokens [ESTIMATED]: {(len(str(message_content)) + len(str(SYSTEM))) // 4}")
 
-    # Export assembled prompt / message content for record
-    export_md_file("\n\n".join([SYSTEM, PROMPT, tree_dirs, data_files]), "userfullprompt.md")
+    # ── Export assembled prompt / message content for record ──────────────────
+    # The *clean_tree* (human-readable, ANSI-free) is used in the export file
+    # so that the saved prompt is readable and free of escape sequences.
+    export_md_file("\n\n".join([SYSTEM, PROMPT, clean_tree, data_files]), "userfullprompt.md")
     export_md_file(message_content, "message_content.md")
 
     # If -ai flag not provided, stop here
