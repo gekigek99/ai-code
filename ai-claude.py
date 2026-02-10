@@ -4,6 +4,7 @@ import sys
 import re
 import base64
 import mimetypes
+import argparse
 from anthropic import Anthropic
 import subprocess
 import yaml
@@ -16,6 +17,124 @@ import pyperclip
 
 # for claude auto-update:
 # - never use 5 consecutive "+"" signs, use only {"+"*5}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Argument parser
+# ──────────────────────────────────────────────────────────────────────────────
+# All CLI flags are defined here in one place using argparse, which
+# automatically generates -h / --help output.  Every flag carries a
+# description so users can discover capabilities without reading source.
+# ──────────────────────────────────────────────────────────────────────────────
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    """Construct and return the argument parser with all supported flags.
+
+    Using argparse gives us:
+      * Automatic -h / --help generation from the per-flag descriptions.
+      * Centralised flag definitions — add a flag once and it appears in help,
+        parsing, and the returned namespace.
+      * Type checking and nargs handling (e.g. -img takes one-or-more paths).
+    """
+    parser = argparse.ArgumentParser(
+        prog="ai-claude",
+        description=(
+            "AI-assisted code generation tool powered by Anthropic Claude.\n"
+            "Reads project source files, builds a prompt, optionally sends it\n"
+            "to the Claude API, and applies the returned file edits to disk."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            "  python ai-claude.py                 Gather sources & build prompt (dry run)\n"
+            "  python ai-claude.py -ai             Send prompt to Claude and apply edits\n"
+            "  python ai-claude.py -ai -f          Same, but skip uncommitted-git check\n"
+            "  python ai-claude.py -ai -pdf        Include PDF files in AI context\n"
+            "  python ai-claude.py -ai -img a.png  Attach image(s) to the prompt\n"
+            "  python ai-claude.py -last            Re-apply last saved Claude response\n"
+            "  python ai-claude.py -gen-source      Ask Claude to generate a source list\n"
+        ),
+    )
+
+    # ── Boolean flags ────────────────────────────────────────────────────────
+    parser.add_argument(
+        "-ai",
+        action="store_true",
+        dest="run_ai",
+        help=(
+            "Send the assembled prompt to the Claude API and apply the "
+            "returned file edits to disk.  Without this flag the script "
+            "performs a dry run: gathers sources, builds the prompt, and "
+            "exports it to the output directory without making an API call."
+        ),
+    )
+
+    parser.add_argument(
+        "-last",
+        action="store_true",
+        dest="run_last",
+        help=(
+            "Skip the API call and instead re-apply the last saved Claude "
+            "response (clauderesponse.md in the output directory).  Useful "
+            "for retrying file application after a manual review or edit."
+        ),
+    )
+
+    parser.add_argument(
+        "-gen-source",
+        action="store_true",
+        dest="run_gen_source",
+        help=(
+            "Ask Claude to generate a recommended source-file list for the "
+            "current prompt.  The result is copied to the clipboard and "
+            "saved as gen-source-clauderesponse.md.  The normal -ai flow "
+            "is NOT executed when this flag is present."
+        ),
+    )
+
+    parser.add_argument(
+        "-f",
+        action="store_true",
+        dest="force",
+        help=(
+            "Force execution even when the git working tree has uncommitted "
+            "changes.  By default the script refuses to run -ai if there are "
+            "pending changes, to prevent accidental overwrites."
+        ),
+    )
+
+    parser.add_argument(
+        "-pdf",
+        action="store_true",
+        dest="include_pdf",
+        help=(
+            "Include PDF files found in the source directories in the AI "
+            "context.  Text is extracted from PDFs via PyMuPDF and sent as "
+            "plain text.  Without this flag, PDF files are discovered but "
+            "not shared with the model."
+        ),
+    )
+
+    # ── Value-carrying flags ─────────────────────────────────────────────────
+    parser.add_argument(
+        "-img",
+        action="append",
+        default=[],
+        metavar="PATH",
+        dest="image_paths",
+        help=(
+            "Attach an image file to the prompt.  May be specified multiple "
+            "times for multiple images (e.g. -img a.png -img b.jpg).  "
+            "Supported formats: JPEG, PNG, GIF, WebP.  Images are base64-"
+            "encoded and sent as vision content blocks."
+        ),
+    )
+
+    return parser
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Configuration loading
+# ──────────────────────────────────────────────────────────────────────────────
 
 # Load configuration from YAML
 def load_config():
@@ -513,9 +632,21 @@ def add_source(files_to_ai: List[FileData], SOURCE, ai_shared_file_types=[]) -> 
     return files_to_ai, abs_file_paths
 
 
-def add_images(files_to_ai: List[FileData]) -> List[FileData]:
+def add_images(files_to_ai: List[FileData], image_paths: List[str]) -> List[FileData]:
     """
-    Parse command line arguments to extract image data from -img flags.
+    Process a list of image file paths and append FileData entries for each.
+
+    Parameters
+    ----------
+    files_to_ai : list[FileData]
+        Accumulator list; new image entries are appended in-place.
+    image_paths : list[str]
+        Paths collected by argparse from one or more ``-img`` flags.
+
+    Returns
+    -------
+    list[FileData]
+        The same *files_to_ai* list (mutated), returned for chaining convenience.
     """
 
     def get_image_media_type(file_path):
@@ -605,35 +736,32 @@ def add_images(files_to_ai: List[FileData]) -> List[FileData]:
             print(f"ERROR: Failed to read/encode image {img_path}: {e}")
             return bytes(), "", -1
 
-    i = 0
-    while i < len(sys.argv):
-        if sys.argv[i] == '-img' and i + 1 < len(sys.argv):
-            img_path = sys.argv[i + 1]
-            abs_path = os.path.abspath(img_path)
-            _, extension = os.path.splitext(abs_path)
-            img_data, img_data_base64, size = get_image_data(img_path)
-            files_to_ai.append(
-                FileData(
-                    file_type="image",
-                    path_abs=os.path.abspath(img_path),
-                    path_rel=img_path,
-                    extension=extension,
-                    ai_share=True, # default true if it was included as flag
-                    
-                    data=img_data,
-                    data_type="binary",
-                    data_size=size,
-                    media_type=get_image_media_type(img_path),
+    for img_path in image_paths:
+        abs_path = os.path.abspath(img_path)
+        _, extension = os.path.splitext(abs_path)
+        img_data, img_data_base64, size = get_image_data(img_path)
+        if size < 0:
+            # get_image_data already printed an error; skip this entry
+            continue
+        files_to_ai.append(
+            FileData(
+                file_type="image",
+                path_abs=abs_path,
+                path_rel=img_path,
+                extension=extension,
+                ai_share=True,  # default true if it was included as flag
+                
+                data=img_data,
+                data_type="binary",
+                data_size=size,
+                media_type=get_image_media_type(img_path),
 
-                    ai_interpretable=True,
-                    ai_data_converted=img_data_base64,
-                    ai_data_converted_type="base64",
-                    ai_data_tokens=1600 if len(img_data_base64) > 500000 else 1200 if len(img_data_base64) > 200000 else 800
-                )
+                ai_interpretable=True,
+                ai_data_converted=img_data_base64,
+                ai_data_converted_type="base64",
+                ai_data_tokens=1600 if len(img_data_base64) > 500000 else 1200 if len(img_data_base64) > 200000 else 800
             )
-            i += 2
-        else:
-            i += 1
+        )
     
     return files_to_ai
 
@@ -1438,26 +1566,30 @@ def generate_prompt_for_gen_source(prompt: str, source: Any, tree_str: str) -> L
 
 def main():
     """
-    Replacement main() that integrates prompt_claude().
-    Drop this in replacing your previous main() and remove the ad-hoc client / streaming block.
+    Main entry point.  Uses argparse for all CLI flag handling so that
+    ``-h`` / ``--help`` is generated automatically from the flag definitions
+    in ``build_arg_parser()``.
     """
+    # ── Parse arguments ──────────────────────────────────────────────────────
+    # argparse handles -h/--help automatically and exits if the user asks for
+    # help or passes unknown flags.
+    parser = build_arg_parser()
+    args = parser.parse_args()
+
     files_to_ai: List[FileData] = []
-    ai_shared_file_types = []
+    ai_shared_file_types: List[str] = []
 
-    run_claude = '-ai' in sys.argv
-    run_last = '-last' in sys.argv
-    run_gen_source = '-gen-source' in sys.argv
-    force = '-f' in sys.argv
-
-    if '-pdf' in sys.argv:
+    if args.include_pdf:
         ai_shared_file_types.append("pdf")
 
-    if '-img' in sys.argv:
-        files_to_ai = add_images(files_to_ai)
+    if args.image_paths:
+        # add_images now receives an explicit list of paths instead of
+        # scanning sys.argv, making it testable and decoupled from CLI parsing.
+        files_to_ai = add_images(files_to_ai, args.image_paths)
         ai_shared_file_types.append("img")
 
     # Handle last prompt: reuse saved clauderesponse.md
-    if run_last:
+    if args.run_last:
         print(f"Applying files from last Claude response ({output_dir}/clauderesponse.md)...")
         md_path = os.path.join(output_dir, "clauderesponse.md")
         if not os.path.isfile(md_path):
@@ -1486,7 +1618,7 @@ def main():
     # The ANSI-coloured tree is printed to the console inside the function.
     clean_tree, ai_file_listing = get_directory_tree(TREE_DIRS, files_to_ai)
 
-    if run_gen_source:
+    if args.run_gen_source:
         print("Generating adapted-to-prompt source via Claude...")
         # For gen-source we pass the *clean tree* (visual hierarchy) because
         # Claude needs the structural overview to generate a good source list.
@@ -1581,12 +1713,12 @@ def main():
     export_md_file(message_content, "message_content.md")
 
     # If -ai flag not provided, stop here
-    if not run_claude:
+    if not args.run_ai:
         print("Not executing AI request...")
         return
 
     # Check for git changes unless forced
-    if not force and has_uncommitted_changes():
+    if not args.force and has_uncommitted_changes():
         print("ERROR: You have uncommitted changes in your git repository.")
         print("Please commit or stash your changes before running this script.")
         sys.exit(1)
