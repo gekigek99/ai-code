@@ -37,6 +37,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "  python ai-code.py -last            Re-apply last saved Claude response\n"
             "  python ai-code.py -gen-source      Ask Claude to generate a source list\n"
             "  python ai-code.py -ai-steps        Run multi-step automated workflow\n"
+            "  python ai-code.py -ai-steps -continue  Resume interrupted workflow\n"
         ),
     )
 
@@ -86,6 +87,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "  Phase 2: Decompose the specification into ordered steps.\n"
             "  Phase 3: Execute each step with user confirmation and git commits.\n"
             "Requires git to be available and the working tree to be clean."
+        ),
+    )
+
+    parser.add_argument(
+        "-continue",
+        action="store_true",
+        dest="continue_steps",
+        help=(
+            "Resume an interrupted -ai-steps workflow from the last saved "
+            "checkpoint.  Skips already-completed and previously-skipped steps. "
+            "If uncommitted changes are detected (from a crash mid-step), they "
+            "are automatically reverted.  Must be used together with -ai-steps."
         ),
     )
 

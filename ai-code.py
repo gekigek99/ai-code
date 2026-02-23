@@ -13,6 +13,7 @@ Usage:
     python ai-code.py -last           # re-apply last saved response
     python ai-code.py -gen-source     # ask Claude for a source list
     python ai-code.py -ai-steps       # multi-step automated workflow
+    python ai-code.py -ai-steps -continue  # resume interrupted workflow
 """
 
 # for claude auto-update:
@@ -53,6 +54,13 @@ def main() -> None:
     # ── 1. Parse CLI arguments ───────────────────────────────────────────────
     parser = build_arg_parser()
     args = parser.parse_args()
+
+    # ── 1.1 Validate flag combinations ───────────────────────────────────────
+    # -continue is only meaningful with -ai-steps
+    if args.continue_steps and not args.run_ai_steps:
+        print("ERROR: -continue can only be used together with -ai-steps.")
+        print("Usage: python ai-code.py -ai-steps -continue")
+        sys.exit(1)
 
     # ── 2. Load configuration ────────────────────────────────────────────────
     script_dir = os.path.dirname(os.path.abspath(__file__))

@@ -7,11 +7,18 @@ Public API:
           Phase 1: Expand the user's minimal prompt.
           Phase 2: Decompose the expanded prompt into ordered steps.
           Phase 3: Execute each step with user confirmation and git commits.
+
+        Supports ``-continue`` to resume from the last saved checkpoint
+        after a crash or connection loss.
 """
 
+import hashlib
 import os
 import sys
 from argparse import Namespace
+from typing import Any, Dict, List, Optional, Set
+
+import yaml as _yaml
 
 from lib.config import Config
 from lib.files import add_source
@@ -29,6 +36,58 @@ from lib.tools.tool_user_confirm import confirm_step
 # Maximum retry attempts for a single step before forced skip
 _MAX_STEP_RETRIES = 3
 
+# Name of the YAML state file used for -continue resume capability
+_STATE_FILENAME = "workflow-state.yaml"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# State persistence helpers
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _compute_prompt_hash(prompt: str) -> str:
+    """Return an MD5 hex digest of *prompt* for identity validation.
+
+    Used by ``-continue`` to verify that the saved state matches the
+    current prompt — if the user changed the prompt, the old state is
+    invalid and we must start fresh.
+    """
+    return hashlib.md5(prompt.encode("utf-8")).hexdigest()
+
+
+def _save_workflow_state(state: Dict[str, Any], output_dir: str) -> None:
+    """Atomically write *state* to the workflow state file.
+
+    Uses a write-to-temp-then-rename pattern so that a crash during write
+    cannot corrupt the state file — either the old or the new version is
+    always intact on disk.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    state_path = os.path.join(output_dir, _STATE_FILENAME)
+    tmp_path = state_path + ".tmp"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            _yaml.safe_dump(state, f, sort_keys=False, allow_unicode=True)
+        os.replace(tmp_path, state_path)
+    except Exception as e:
+        warn(f"[state] Failed to save workflow state: {e}")
+
+
+def _load_workflow_state(output_dir: str) -> Optional[Dict[str, Any]]:
+    """Load the workflow state file, returning None if absent or corrupt."""
+    state_path = os.path.join(output_dir, _STATE_FILENAME)
+    if not os.path.isfile(state_path):
+        return None
+    try:
+        with open(state_path, "r", encoding="utf-8") as f:
+            return _yaml.safe_load(f)
+    except Exception as e:
+        warn(f"[state] Failed to load workflow state: {e}")
+        return None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Tree / source helpers
+# ══════════════════════════════════════════════════════════════════════════════
 
 def _build_current_tree(cfg: Config, ai_shared_file_types: list) -> str:
     """Helper: rebuild the directory tree from current disk state.
@@ -45,28 +104,72 @@ def _build_current_tree(cfg: Config, ai_shared_file_types: list) -> str:
     return clean_tree
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Progress display helpers
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _step_prefix(step_number: int, total_steps: int) -> str:
+    """Return a consistent ``[Step X/Y]`` prefix for log messages."""
+    return f"[Step {step_number}/{total_steps}]"
+
+
+def _print_step_header(
+    step_number: int,
+    total_steps: int,
+    step_title: str,
+    completed: int,
+    skipped: int,
+) -> None:
+    """Print a prominent header for the step being executed, including
+    live progress counts so the user always knows where they are."""
+    remaining = total_steps - completed - skipped - 1  # -1 = current step
+    print(f"\n{COLOR_GREEN}{'═' * 60}")
+    print(f"  STEP {step_number}/{total_steps}: {step_title}")
+    print(f"  Progress: {completed} completed | {skipped} skipped | {remaining} after this")
+    print(f"{'═' * 60}{COLOR_RESET}\n")
+
+
+def _print_summary(completed: int, skipped: int, total: int) -> None:
+    """Print a summary of the ai-steps workflow execution."""
+    remaining = total - completed - skipped
+    print(f"\n{'=' * 60}")
+    print(f"  AI-STEPS WORKFLOW SUMMARY")
+    print(f"{'=' * 60}")
+    print(f"  Total steps:     {total}")
+    print(f"  Completed:       {completed}")
+    print(f"  Skipped:         {skipped}")
+    print(f"  Remaining:       {remaining}")
+    print(f"{'=' * 60}\n")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Main workflow
+# ══════════════════════════════════════════════════════════════════════════════
+
 def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
     """Execute the ``-ai-steps`` automated multi-step workflow.
 
-    This workflow requires git to be available and the working tree to be
-    clean.  Each accepted step is committed, providing rollback points.
+    This workflow requires git to be available.  Each accepted step is
+    committed, providing rollback points.
+
+    When ``args.continue_steps`` is True, the workflow resumes from the
+    last saved checkpoint — skipping already-completed phases and steps.
+    If uncommitted changes are found (e.g. from a crash), they are
+    automatically reverted before resuming.
 
     Parameters
     ----------
     cfg : Config
         Fully resolved configuration.
     args : Namespace
-        Parsed CLI arguments.
+        Parsed CLI arguments (``continue_steps``, ``include_pdf``).
     """
+    continue_mode = getattr(args, "continue_steps", False)
+
     # ── Pre-flight checks ────────────────────────────────────────────────────
     if not is_git_available():
         print("ERROR: git is required for the -ai-steps workflow but is not available.")
         print("Please install git or ensure it is in your PATH.")
-        sys.exit(1)
-
-    if has_uncommitted_changes(ignore_dir_name=cfg.script_dir_name):
-        print("ERROR: The -ai-steps workflow requires a clean git working tree.")
-        print("Please commit or stash all changes before running -ai-steps.")
         sys.exit(1)
 
     ai_shared_file_types: list = []
@@ -77,122 +180,216 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
     steps_output_dir = os.path.join(cfg.claude_output_dir, "ai-steps")
     os.makedirs(steps_output_dir, exist_ok=True)
 
-    print(f"\n{'='*60}")
+    # ── State initialisation ─────────────────────────────────────────────────
+    # These variables track workflow progress and are populated either from
+    # a fresh run or from a saved state file when resuming.
+    expanded_prompt_text: Optional[str] = None
+    steps: Optional[List[Dict[str, Any]]] = None
+    completed_steps_set: Set[int] = set()
+    skipped_steps_set: Set[int] = set()
+    prompt_hash = _compute_prompt_hash(cfg.prompt)
+
+    # ── Handle -continue: load saved state ───────────────────────────────────
+    if continue_mode:
+        saved_state = _load_workflow_state(steps_output_dir)
+
+        if saved_state is None:
+            warn("[continue] No saved workflow state found. Starting fresh.")
+            continue_mode = False  # fall through to normal flow
+        elif saved_state.get("prompt_hash") != prompt_hash:
+            warn(
+                "[continue] Prompt has changed since the last run. "
+                "Saved state is invalid — starting fresh."
+            )
+            continue_mode = False
+        else:
+            # Valid state found — restore progress
+            expanded_prompt_text = saved_state.get("expanded_prompt")
+            steps = saved_state.get("steps")
+            completed_steps_set = set(saved_state.get("completed_steps", []))
+            skipped_steps_set = set(saved_state.get("skipped_steps", []))
+
+            phase_reached = saved_state.get("phase_completed", 0)
+
+            print(f"\n{COLOR_CYAN}[continue] Resuming from saved state:{COLOR_RESET}")
+            if expanded_prompt_text:
+                print(f"  Expanded prompt: {len(expanded_prompt_text)} chars (Phase 1 done)")
+            if steps:
+                print(f"  Steps loaded: {len(steps)} total")
+            if completed_steps_set:
+                print(f"  Completed steps: {sorted(completed_steps_set)}")
+            if skipped_steps_set:
+                print(f"  Skipped steps: {sorted(skipped_steps_set)}")
+
+            # If there are uncommitted changes (crash residue), revert them
+            if has_uncommitted_changes(ignore_dir_name=cfg.script_dir_name):
+                print(f"\n{COLOR_YELLOW}[continue] Uncommitted changes detected (likely from interrupted step).{COLOR_RESET}")
+                print("[continue] Reverting to last commit to restore clean state...")
+                reverted = revert_to_last_commit()
+                if not reverted:
+                    print("ERROR: Failed to revert uncommitted changes. Please resolve manually.")
+                    sys.exit(1)
+
+    # ── Non-continue mode: require clean working tree ────────────────────────
+    if not continue_mode:
+        if has_uncommitted_changes(ignore_dir_name=cfg.script_dir_name):
+            print("ERROR: The -ai-steps workflow requires a clean git working tree.")
+            print("Please commit or stash all changes before running -ai-steps.")
+            sys.exit(1)
+
+    print(f"\n{'=' * 60}")
     print(f"  AI-STEPS WORKFLOW")
     print(f"  Minimal prompt: {cfg.prompt[:80]}{'...' if len(cfg.prompt) > 80 else ''}")
-    print(f"{'='*60}\n")
+    if continue_mode:
+        print(f"  Mode: RESUMING from saved checkpoint")
+    print(f"{'=' * 60}\n")
 
     # ═════════════════════════════════════════════════════════════════════════
     # PHASE 1: PROMPT EXPANSION
     # ═════════════════════════════════════════════════════════════════════════
-    print(f"\n{COLOR_CYAN}{'─'*60}")
-    print(f"  PHASE 1: PROMPT EXPANSION")
-    print(f"{'─'*60}{COLOR_RESET}\n")
+    if expanded_prompt_text is None:
+        print(f"\n{COLOR_CYAN}{'─' * 60}")
+        print(f"  PHASE 1: PROMPT EXPANSION")
+        print(f"{'─' * 60}{COLOR_RESET}\n")
 
-    phase1_dir = os.path.join(steps_output_dir, "phase1-expand")
-    os.makedirs(phase1_dir, exist_ok=True)
+        phase1_dir = os.path.join(steps_output_dir, "phase1-expand")
+        os.makedirs(phase1_dir, exist_ok=True)
 
-    # 1.1 Generate source for prompt expansion
-    print("[Phase 1.1] Generating source list for prompt expansion...")
-    tree_str = _build_current_tree(cfg, ai_shared_file_types)
+        # 1.1 Generate source for prompt expansion
+        print("[Phase 1.1] Generating source list for prompt expansion...")
+        tree_str = _build_current_tree(cfg, ai_shared_file_types)
 
-    source_result = generate_source(
-        cfg=cfg,
-        prompt=cfg.prompt,
-        tree_str=tree_str,
-        example_source=cfg.source,
-        output_dir=phase1_dir,
-    )
+        source_result = generate_source(
+            cfg=cfg,
+            prompt=cfg.prompt,
+            tree_str=tree_str,
+            example_source=cfg.source,
+            output_dir=phase1_dir,
+        )
 
-    if source_result["status"] != "ok":
-        print(f"\n[Phase 1.1] FAILED: {source_result.get('error')}")
-        print("Cannot proceed without a source list. Aborting.")
-        return
+        if source_result["status"] != "ok":
+            print(f"\n[Phase 1.1] FAILED: {source_result.get('error')}")
+            print("Cannot proceed without a source list. Aborting.")
+            return
 
-    expand_source_paths = source_result["source_list"]
-    print(f"[Phase 1.1] Source list: {len(expand_source_paths)} entries")
+        expand_source_paths = source_result["source_list"]
+        print(f"[Phase 1.1] Source list: {len(expand_source_paths)} entries")
 
-    # 1.2 Expand the minimal prompt
-    print("\n[Phase 1.2] Expanding minimal prompt...")
-    expand_result = expand_prompt(
-        cfg=cfg,
-        minimal_prompt=cfg.prompt,
-        source_paths=expand_source_paths,
-        output_dir=phase1_dir,
-    )
+        # 1.2 Expand the minimal prompt
+        print("\n[Phase 1.2] Expanding minimal prompt...")
+        expand_result = expand_prompt(
+            cfg=cfg,
+            minimal_prompt=cfg.prompt,
+            source_paths=expand_source_paths,
+            output_dir=phase1_dir,
+        )
 
-    if expand_result["status"] != "ok":
-        print(f"\n[Phase 1.2] FAILED: {expand_result.get('error')}")
-        print("Cannot proceed without an expanded prompt. Aborting.")
-        return
+        if expand_result["status"] != "ok":
+            print(f"\n[Phase 1.2] FAILED: {expand_result.get('error')}")
+            print("Cannot proceed without an expanded prompt. Aborting.")
+            return
 
-    expanded_prompt_text = expand_result["expanded_prompt"]
-    print(f"[Phase 1.2] Expanded prompt: {len(expanded_prompt_text)} chars")
+        expanded_prompt_text = expand_result["expanded_prompt"]
+        print(f"[Phase 1.2] Expanded prompt: {len(expanded_prompt_text)} chars")
 
-    # Save the expanded prompt for reference
-    export_md_file(expanded_prompt_text, "expanded-prompt.md", steps_output_dir)
+        # Save the expanded prompt for reference
+        export_md_file(expanded_prompt_text, "expanded-prompt.md", steps_output_dir)
+
+        # Checkpoint: save state after Phase 1 completes
+        _save_workflow_state({
+            "prompt_hash": prompt_hash,
+            "phase_completed": 1,
+            "expanded_prompt": expanded_prompt_text,
+            "steps": None,
+            "completed_steps": [],
+            "skipped_steps": [],
+        }, steps_output_dir)
+        print("[Phase 1] ✓ State saved (Phase 1 complete)")
+    else:
+        print(f"\n{COLOR_CYAN}{'─' * 60}")
+        print(f"  PHASE 1: PROMPT EXPANSION — SKIPPED (loaded from state)")
+        print(f"{'─' * 60}{COLOR_RESET}\n")
 
     # ═════════════════════════════════════════════════════════════════════════
     # PHASE 2: STEP DECOMPOSITION
     # ═════════════════════════════════════════════════════════════════════════
-    print(f"\n{COLOR_CYAN}{'─'*60}")
-    print(f"  PHASE 2: STEP DECOMPOSITION")
-    print(f"{'─'*60}{COLOR_RESET}\n")
+    if steps is None:
+        print(f"\n{COLOR_CYAN}{'─' * 60}")
+        print(f"  PHASE 2: STEP DECOMPOSITION")
+        print(f"{'─' * 60}{COLOR_RESET}\n")
 
-    phase2_dir = os.path.join(steps_output_dir, "phase2-stepize")
-    os.makedirs(phase2_dir, exist_ok=True)
+        phase2_dir = os.path.join(steps_output_dir, "phase2-stepize")
+        os.makedirs(phase2_dir, exist_ok=True)
 
-    # 2.1 Generate source for step-ization (may differ from phase 1 source)
-    print("[Phase 2.1] Generating source list for step decomposition...")
-    tree_str = _build_current_tree(cfg, ai_shared_file_types)
+        # 2.1 Generate source for step-ization
+        print("[Phase 2.1] Generating source list for step decomposition...")
+        tree_str = _build_current_tree(cfg, ai_shared_file_types)
 
-    step_source_result = generate_source(
-        cfg=cfg,
-        prompt=expanded_prompt_text,
-        tree_str=tree_str,
-        example_source=cfg.source,
-        output_dir=phase2_dir,
-    )
+        step_source_result = generate_source(
+            cfg=cfg,
+            prompt=expanded_prompt_text,
+            tree_str=tree_str,
+            example_source=cfg.source,
+            output_dir=phase2_dir,
+        )
 
-    if step_source_result["status"] != "ok":
-        print(f"\n[Phase 2.1] FAILED: {step_source_result.get('error')}")
-        print("Cannot proceed without a source list. Aborting.")
-        return
+        if step_source_result["status"] != "ok":
+            print(f"\n[Phase 2.1] FAILED: {step_source_result.get('error')}")
+            print("Cannot proceed without a source list. Aborting.")
+            return
 
-    stepize_source_paths = step_source_result["source_list"]
-    print(f"[Phase 2.1] Source list: {len(stepize_source_paths)} entries")
+        stepize_source_paths = step_source_result["source_list"]
+        print(f"[Phase 2.1] Source list: {len(stepize_source_paths)} entries")
 
-    # 2.2 Decompose expanded prompt into steps
-    print("\n[Phase 2.2] Decomposing expanded prompt into steps...")
-    steps_result = stepize_prompt(
-        cfg=cfg,
-        expanded_prompt=expanded_prompt_text,
-        source_paths=stepize_source_paths,
-        output_dir=phase2_dir,
-    )
+        # 2.2 Decompose expanded prompt into steps
+        print("\n[Phase 2.2] Decomposing expanded prompt into steps...")
+        steps_result = stepize_prompt(
+            cfg=cfg,
+            expanded_prompt=expanded_prompt_text,
+            source_paths=stepize_source_paths,
+            output_dir=phase2_dir,
+        )
 
-    if steps_result["status"] != "ok":
-        print(f"\n[Phase 2.2] FAILED: {steps_result.get('error')}")
-        print("Cannot proceed without step decomposition. Aborting.")
-        return
+        if steps_result["status"] != "ok":
+            print(f"\n[Phase 2.2] FAILED: {steps_result.get('error')}")
+            print("Cannot proceed without step decomposition. Aborting.")
+            return
 
-    steps = steps_result["steps"]
-    print(f"\n[Phase 2.2] Decomposed into {len(steps)} step(s)")
+        steps = steps_result["steps"]
+        print(f"\n[Phase 2.2] Decomposed into {len(steps)} step(s)")
 
-    # Save steps for reference
-    import yaml as _yaml
-    steps_yaml_str = _yaml.safe_dump({"steps": steps}, sort_keys=False, allow_unicode=True)
-    export_md_file(steps_yaml_str, "steps.yaml", steps_output_dir)
+        # Save steps for reference
+        steps_yaml_str = _yaml.safe_dump({"steps": steps}, sort_keys=False, allow_unicode=True)
+        export_md_file(steps_yaml_str, "steps.yaml", steps_output_dir)
+
+        # Checkpoint: save state after Phase 2 completes
+        _save_workflow_state({
+            "prompt_hash": prompt_hash,
+            "phase_completed": 2,
+            "expanded_prompt": expanded_prompt_text,
+            "steps": steps,
+            "completed_steps": sorted(completed_steps_set),
+            "skipped_steps": sorted(skipped_steps_set),
+        }, steps_output_dir)
+        print("[Phase 2] ✓ State saved (Phase 2 complete)")
+    else:
+        print(f"\n{COLOR_CYAN}{'─' * 60}")
+        print(f"  PHASE 2: STEP DECOMPOSITION — SKIPPED (loaded from state)")
+        print(f"{'─' * 60}{COLOR_RESET}\n")
 
     # ═════════════════════════════════════════════════════════════════════════
     # PHASE 3: STEP EXECUTION LOOP
     # ═════════════════════════════════════════════════════════════════════════
-    print(f"\n{COLOR_CYAN}{'─'*60}")
-    print(f"  PHASE 3: STEP EXECUTION ({len(steps)} steps)")
-    print(f"{'─'*60}{COLOR_RESET}\n")
+    total_steps = len(steps)
+    completed_count = len(completed_steps_set)
+    skipped_count = len(skipped_steps_set)
 
-    completed_steps = 0
-    skipped_steps = 0
+    print(f"\n{COLOR_CYAN}{'─' * 60}")
+    print(f"  PHASE 3: STEP EXECUTION ({total_steps} steps total)")
+    if completed_count or skipped_count:
+        print(f"  Resuming: {completed_count} completed, {skipped_count} skipped, "
+              f"{total_steps - completed_count - skipped_count} remaining")
+    print(f"{'─' * 60}{COLOR_RESET}\n")
 
     for step in steps:
         step_number = step["number"]
@@ -200,12 +397,23 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
         step_prompt = step["prompt"]
         step_source = step.get("source", cfg.source)
 
+        # ── Skip already-processed steps (from -continue) ───────────────────
+        if step_number in completed_steps_set:
+            print(f"{COLOR_CYAN}[Step {step_number}/{total_steps}] "
+                  f"SKIPPED (already completed): {step_title}{COLOR_RESET}")
+            continue
+
+        if step_number in skipped_steps_set:
+            print(f"{COLOR_YELLOW}[Step {step_number}/{total_steps}] "
+                  f"SKIPPED (previously skipped): {step_title}{COLOR_RESET}")
+            continue
+
+        # ── Step execution ───────────────────────────────────────────────────
         step_dir = os.path.join(steps_output_dir, f"step-{step_number}")
         os.makedirs(step_dir, exist_ok=True)
 
-        print(f"\n{COLOR_GREEN}{'═'*60}")
-        print(f"  STEP {step_number}/{len(steps)}: {step_title}")
-        print(f"{'═'*60}{COLOR_RESET}\n")
+        prefix = _step_prefix(step_number, total_steps)
+        _print_step_header(step_number, total_steps, step_title, completed_count, skipped_count)
 
         current_prompt = step_prompt
         retry_count = 0
@@ -213,7 +421,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
         while True:
             # ── 3.1 Generate fresh source for this step ─────────────────────
             # Rebuild tree because previous steps may have changed files
-            print(f"[Step {step_number}.1] Generating source list for this step...")
+            print(f"{prefix} Generating source list...")
             tree_str = _build_current_tree(cfg, ai_shared_file_types)
 
             step_source_result = generate_source(
@@ -225,15 +433,15 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
             )
 
             if step_source_result["status"] != "ok":
-                warn(f"[Step {step_number}.1] Source generation failed: {step_source_result.get('error')}")
-                warn(f"Falling back to step-defined source list: {step_source}")
+                warn(f"{prefix} Source generation failed: {step_source_result.get('error')}")
+                warn(f"{prefix} Falling back to step-defined source list: {step_source}")
                 exec_source_paths = step_source if step_source else cfg.source
             else:
                 exec_source_paths = step_source_result["source_list"]
-                print(f"[Step {step_number}.1] Source list: {len(exec_source_paths)} entries")
+                print(f"{prefix} Source list: {len(exec_source_paths)} entries")
 
             # ── 3.2 Execute the step ────────────────────────────────────────
-            print(f"\n[Step {step_number}.2] Executing step...")
+            print(f"\n{prefix} Executing step...")
             exec_result = execute_prompt(
                 cfg=cfg,
                 prompt=current_prompt,
@@ -244,15 +452,33 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
             )
 
             if exec_result["status"] != "ok":
-                warn(f"[Step {step_number}.2] Execution failed: {exec_result.get('error')}")
+                warn(f"{prefix} Execution failed: {exec_result.get('error')}")
                 # Revert any partial changes
-                print("Reverting changes from failed execution...")
+                print(f"{prefix} Reverting changes from failed execution...")
                 revert_to_last_commit()
+                # Re-save state after revert (in case git clean removed it)
+                _save_workflow_state({
+                    "prompt_hash": prompt_hash,
+                    "phase_completed": 2,
+                    "expanded_prompt": expanded_prompt_text,
+                    "steps": steps,
+                    "completed_steps": sorted(completed_steps_set),
+                    "skipped_steps": sorted(skipped_steps_set),
+                }, steps_output_dir)
 
                 retry_count += 1
                 if retry_count >= _MAX_STEP_RETRIES:
-                    warn(f"[Step {step_number}] Max retries ({_MAX_STEP_RETRIES}) reached. Skipping step.")
-                    skipped_steps += 1
+                    warn(f"{prefix} Max retries ({_MAX_STEP_RETRIES}) reached. Skipping step.")
+                    skipped_steps_set.add(step_number)
+                    skipped_count += 1
+                    _save_workflow_state({
+                        "prompt_hash": prompt_hash,
+                        "phase_completed": 2,
+                        "expanded_prompt": expanded_prompt_text,
+                        "steps": steps,
+                        "completed_steps": sorted(completed_steps_set),
+                        "skipped_steps": sorted(skipped_steps_set),
+                    }, steps_output_dir)
                     break
 
                 # Ask user whether to retry or skip
@@ -263,16 +489,34 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
                 elif user_result["action"] == "retry":
                     continue
                 elif user_result["action"] == "skip":
-                    skipped_steps += 1
+                    skipped_steps_set.add(step_number)
+                    skipped_count += 1
+                    _save_workflow_state({
+                        "prompt_hash": prompt_hash,
+                        "phase_completed": 2,
+                        "expanded_prompt": expanded_prompt_text,
+                        "steps": steps,
+                        "completed_steps": sorted(completed_steps_set),
+                        "skipped_steps": sorted(skipped_steps_set),
+                    }, steps_output_dir)
                     break
                 elif user_result["action"] == "quit":
-                    print("\n[ai-steps] Quitting workflow.")
-                    _print_summary(completed_steps, skipped_steps, len(steps))
+                    print(f"\n{prefix} Quitting workflow.")
+                    _print_summary(completed_count, skipped_count, total_steps)
                     log_prompt(cfg.prompt, cfg.logs_dir)
                     return
                 else:
                     # "continue" after failure — treat as skip
-                    skipped_steps += 1
+                    skipped_steps_set.add(step_number)
+                    skipped_count += 1
+                    _save_workflow_state({
+                        "prompt_hash": prompt_hash,
+                        "phase_completed": 2,
+                        "expanded_prompt": expanded_prompt_text,
+                        "steps": steps,
+                        "completed_steps": sorted(completed_steps_set),
+                        "skipped_steps": sorted(skipped_steps_set),
+                    }, steps_output_dir)
                     break
 
             # ── 3.3 Ask user to confirm ─────────────────────────────────────
@@ -280,59 +524,104 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
 
             if user_result["action"] == "continue":
                 # Accept: commit the changes
-                commit_msg = f"ai-steps: step {step_number} - {step_title}"
+                commit_msg = f"ai-steps: step {step_number}/{total_steps} - {step_title}"
                 committed = commit_changes(commit_msg, ignore_dir_name=cfg.script_dir_name)
                 if committed:
-                    print(f"[Step {step_number}] Changes committed: {commit_msg}")
+                    print(f"{prefix} ✓ Changes committed: {commit_msg}")
                 else:
-                    warn(f"[Step {step_number}] Git commit failed or nothing to commit.")
-                completed_steps += 1
+                    warn(f"{prefix} Git commit failed or nothing to commit.")
+                completed_steps_set.add(step_number)
+                completed_count += 1
+
+                # Save state after successful commit
+                _save_workflow_state({
+                    "prompt_hash": prompt_hash,
+                    "phase_completed": 2,
+                    "expanded_prompt": expanded_prompt_text,
+                    "steps": steps,
+                    "completed_steps": sorted(completed_steps_set),
+                    "skipped_steps": sorted(skipped_steps_set),
+                }, steps_output_dir)
+                print(f"{prefix} ✓ State saved")
                 break
 
             elif user_result["action"] == "retry":
                 # Revert changes, modify prompt, re-execute
-                print(f"[Step {step_number}] Reverting changes for retry...")
+                print(f"{prefix} Reverting changes for retry...")
                 revert_to_last_commit()
+                # Re-save state after revert
+                _save_workflow_state({
+                    "prompt_hash": prompt_hash,
+                    "phase_completed": 2,
+                    "expanded_prompt": expanded_prompt_text,
+                    "steps": steps,
+                    "completed_steps": sorted(completed_steps_set),
+                    "skipped_steps": sorted(skipped_steps_set),
+                }, steps_output_dir)
 
                 retry_count += 1
                 if retry_count >= _MAX_STEP_RETRIES:
-                    warn(f"[Step {step_number}] Max retries ({_MAX_STEP_RETRIES}) reached. Skipping step.")
-                    skipped_steps += 1
+                    warn(f"{prefix} Max retries ({_MAX_STEP_RETRIES}) reached. Skipping step.")
+                    skipped_steps_set.add(step_number)
+                    skipped_count += 1
+                    _save_workflow_state({
+                        "prompt_hash": prompt_hash,
+                        "phase_completed": 2,
+                        "expanded_prompt": expanded_prompt_text,
+                        "steps": steps,
+                        "completed_steps": sorted(completed_steps_set),
+                        "skipped_steps": sorted(skipped_steps_set),
+                    }, steps_output_dir)
                     break
 
                 if user_result["modification"]:
                     current_prompt = step_prompt + "\n\nAdditional instructions:\n" + user_result["modification"]
-                    print(f"[Step {step_number}] Prompt modified with user input. Retrying...")
+                    print(f"{prefix} Prompt modified with user input. Retrying...")
                 else:
-                    print(f"[Step {step_number}] Retrying with same prompt...")
+                    print(f"{prefix} Retrying with same prompt...")
                 continue
 
             elif user_result["action"] == "skip":
-                print(f"[Step {step_number}] Reverting changes and skipping...")
+                print(f"{prefix} Reverting changes and skipping...")
                 revert_to_last_commit()
-                skipped_steps += 1
+                skipped_steps_set.add(step_number)
+                skipped_count += 1
+                _save_workflow_state({
+                    "prompt_hash": prompt_hash,
+                    "phase_completed": 2,
+                    "expanded_prompt": expanded_prompt_text,
+                    "steps": steps,
+                    "completed_steps": sorted(completed_steps_set),
+                    "skipped_steps": sorted(skipped_steps_set),
+                }, steps_output_dir)
                 break
 
             elif user_result["action"] == "quit":
-                print(f"[Step {step_number}] Reverting changes and quitting...")
+                print(f"{prefix} Reverting changes and quitting...")
                 revert_to_last_commit()
-                _print_summary(completed_steps, skipped_steps, len(steps))
+                # Save state so -continue can resume later
+                _save_workflow_state({
+                    "prompt_hash": prompt_hash,
+                    "phase_completed": 2,
+                    "expanded_prompt": expanded_prompt_text,
+                    "steps": steps,
+                    "completed_steps": sorted(completed_steps_set),
+                    "skipped_steps": sorted(skipped_steps_set),
+                }, steps_output_dir)
+                _print_summary(completed_count, skipped_count, total_steps)
                 log_prompt(cfg.prompt, cfg.logs_dir)
                 return
 
     # ── Final summary ────────────────────────────────────────────────────────
-    _print_summary(completed_steps, skipped_steps, len(steps))
+    _print_summary(completed_count, skipped_count, total_steps)
     log_prompt(cfg.prompt, cfg.logs_dir)
 
-
-def _print_summary(completed: int, skipped: int, total: int) -> None:
-    """Print a summary of the ai-steps workflow execution."""
-    remaining = total - completed - skipped
-    print(f"\n{'='*60}")
-    print(f"  AI-STEPS WORKFLOW SUMMARY")
-    print(f"{'='*60}")
-    print(f"  Total steps:     {total}")
-    print(f"  Completed:       {completed}")
-    print(f"  Skipped:         {skipped}")
-    print(f"  Remaining:       {remaining}")
-    print(f"{'='*60}\n")
+    # Clean up state file on successful completion of all steps
+    if completed_count + skipped_count >= total_steps:
+        state_path = os.path.join(steps_output_dir, _STATE_FILENAME)
+        if os.path.isfile(state_path):
+            print("[ai-steps] Workflow complete — removing state file.")
+            try:
+                os.remove(state_path)
+            except Exception:
+                pass  # non-critical

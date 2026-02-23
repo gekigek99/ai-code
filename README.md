@@ -53,6 +53,7 @@ A modular Python tool to run Anthropic Claude on your codebase, generate or upda
         ├── gen-source-thinking.md
         ├── gen-source-rawdata.md
         └── ai-steps/            # Multi-step workflow artifacts
+            ├── workflow-state.yaml  # Resume checkpoint (for -continue)
             ├── expanded-prompt.md
             ├── steps.yaml
             ├── phase1-expand/
@@ -76,6 +77,7 @@ A modular Python tool to run Anthropic Claude on your codebase, generate or upda
 - Extended thinking support
 - Source-list generation mode (`-gen-source`)
 - **Multi-step automated workflow** (`-ai-steps`): expands prompt → decomposes into steps → executes each with user confirmation and git commits
+- **Crash-resilient resume** (`-ai-steps -continue`): resumes an interrupted workflow from the last saved checkpoint
 
 ## Workflows
 
@@ -96,6 +98,7 @@ A fully automated workflow for complex tasks:
 3. **Phase 3 — Step Execution**: Iterates through each step:
    - Generates a fresh source list (files may have changed from previous steps).
    - Executes the step prompt against the source files.
+   - Displays live progress: `Step X/Y` with completed/skipped/remaining counts.
    - Asks for user confirmation:
      - **Accept**: commits the changes and proceeds to the next step.
      - **Retry**: reverts changes, optionally modifies the step prompt, and re-executes.
@@ -103,6 +106,23 @@ A fully automated workflow for complex tasks:
      - **Quit**: reverts changes and stops the workflow.
 
 **Requirements**: git must be available and the working tree must be clean. Each accepted step is committed, providing clean rollback points.
+
+### `-ai-steps -continue` — Resume Interrupted Workflow
+
+If an `-ai-steps` run is interrupted (crash, connection loss, power failure, or manual quit), use `-continue` to resume:
+
+```sh
+python ai-code.py -ai-steps -continue
+```
+
+The workflow saves a checkpoint (`workflow-state.yaml`) after each phase and step. On resume:
+
+- **Prompt validation**: verifies that the prompt hasn't changed since the original run (starts fresh if it has).
+- **Phase skip**: phases that already completed (expansion, decomposition) are skipped — their results are loaded from the state file.
+- **Step skip**: steps that were already committed or skipped are bypassed.
+- **Dirty tree recovery**: if uncommitted changes are found (from a crash mid-step), they are automatically reverted before resuming.
+
+The state file is automatically removed once all steps have been processed.
 
 ## Prerequisites
 
@@ -175,6 +195,7 @@ WEBSEARCH_MAX_RESULTS: 5
 | `python ai-code.py -last` | Re-apply last saved Claude response |
 | `python ai-code.py -gen-source` | Ask Claude to generate a recommended source list |
 | `python ai-code.py -ai-steps` | Run automated multi-step workflow |
+| `python ai-code.py -ai-steps -continue` | Resume an interrupted multi-step workflow |
 | `python ai-code.py -pdf` | Include PDF text content in AI context |
 | `python ai-code.py -img path/to/image.png` | Attach image(s) to the prompt |
 | `python ai-code.py -h` | Show full help with all flags |
