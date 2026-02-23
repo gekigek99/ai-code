@@ -10,6 +10,10 @@ Public API:
 
         Supports ``-continue`` to resume from the last saved checkpoint
         after a crash or connection loss.
+
+Commit message format:
+    [category: feature_title]: ai-step X/Y - step_title
+    e.g. [database: User Preferences]: ai-step 1/5 - Add preferences table
 """
 
 import hashlib
@@ -105,6 +109,38 @@ def _build_current_tree(cfg: Config, ai_shared_file_types: list) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# Commit message formatting
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _format_commit_message(
+    step_number: int,
+    total_steps: int,
+    step_title: str,
+    step_category: str,
+    feature_title: str,
+) -> str:
+    """Build a structured commit message with category and feature context.
+
+    Format: ``[category: feature_title]: ai-step X/Y - step_title``
+    e.g.  ``[database: User Preferences]: ai-step 1/5 - Add preferences table``
+
+    Parameters
+    ----------
+    step_number : int
+        1-based step index.
+    total_steps : int
+        Total number of steps in the workflow.
+    step_title : str
+        Short description of what this step implements.
+    step_category : str
+        System area affected (e.g. "database", "admin", "api").
+    feature_title : str
+        Overall feature label (e.g. "User Preferences").
+    """
+    return f"[{step_category}: {feature_title}]: ai-step {step_number}/{total_steps} - {step_title}"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Progress display helpers
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -117,14 +153,17 @@ def _print_step_header(
     step_number: int,
     total_steps: int,
     step_title: str,
+    step_category: str,
+    feature_title: str,
     completed: int,
     skipped: int,
 ) -> None:
     """Print a prominent header for the step being executed, including
-    live progress counts so the user always knows where they are."""
+    live progress counts and the category/feature context."""
     remaining = total_steps - completed - skipped - 1  # -1 = current step
     print(f"\n{COLOR_GREEN}{'═' * 60}")
     print(f"  STEP {step_number}/{total_steps}: {step_title}")
+    print(f"  Category: {step_category} | Feature: {feature_title}")
     print(f"  Progress: {completed} completed | {skipped} skipped | {remaining} after this")
     print(f"{'═' * 60}{COLOR_RESET}\n")
 
@@ -150,7 +189,8 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
     """Execute the ``-ai-steps`` automated multi-step workflow.
 
     This workflow requires git to be available.  Each accepted step is
-    committed, providing rollback points.
+    committed with a structured message:
+    ``[category: feature_title]: ai-step X/Y - step_title``
 
     When ``args.continue_steps`` is True, the workflow resumes from the
     last saved checkpoint — skipping already-completed phases and steps.
@@ -185,6 +225,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
     # a fresh run or from a saved state file when resuming.
     expanded_prompt_text: Optional[str] = None
     steps: Optional[List[Dict[str, Any]]] = None
+    feature_title: str = "ai-steps"  # default fallback; replaced by stepize result
     completed_steps_set: Set[int] = set()
     skipped_steps_set: Set[int] = set()
     prompt_hash = _compute_prompt_hash(cfg.prompt)
@@ -206,12 +247,14 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
             # Valid state found — restore progress
             expanded_prompt_text = saved_state.get("expanded_prompt")
             steps = saved_state.get("steps")
+            feature_title = saved_state.get("feature_title", "ai-steps")
             completed_steps_set = set(saved_state.get("completed_steps", []))
             skipped_steps_set = set(saved_state.get("skipped_steps", []))
 
             phase_reached = saved_state.get("phase_completed", 0)
 
             print(f"\n{COLOR_CYAN}[continue] Resuming from saved state:{COLOR_RESET}")
+            print(f"  Feature: {feature_title}")
             if expanded_prompt_text:
                 print(f"  Expanded prompt: {len(expanded_prompt_text)} chars (Phase 1 done)")
             if steps:
@@ -242,6 +285,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
     print(f"  Minimal prompt: {cfg.prompt[:80]}{'...' if len(cfg.prompt) > 80 else ''}")
     if continue_mode:
         print(f"  Mode: RESUMING from saved checkpoint")
+        print(f"  Feature: {feature_title}")
     print(f"{'=' * 60}\n")
 
     # ═════════════════════════════════════════════════════════════════════════
@@ -300,6 +344,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
             "prompt_hash": prompt_hash,
             "phase_completed": 1,
             "expanded_prompt": expanded_prompt_text,
+            "feature_title": feature_title,
             "steps": None,
             "completed_steps": [],
             "skipped_steps": [],
@@ -356,10 +401,17 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
             return
 
         steps = steps_result["steps"]
-        print(f"\n[Phase 2.2] Decomposed into {len(steps)} step(s)")
+        # Extract feature_title from the stepize result for commit messages
+        feature_title = steps_result.get("feature_title", "ai-steps")
+        print(f"\n[Phase 2.2] Feature: {feature_title}")
+        print(f"[Phase 2.2] Decomposed into {len(steps)} step(s)")
 
         # Save steps for reference
-        steps_yaml_str = _yaml.safe_dump({"steps": steps}, sort_keys=False, allow_unicode=True)
+        steps_yaml_str = _yaml.safe_dump(
+            {"feature_title": feature_title, "steps": steps},
+            sort_keys=False,
+            allow_unicode=True,
+        )
         export_md_file(steps_yaml_str, "steps.yaml", steps_output_dir)
 
         # Checkpoint: save state after Phase 2 completes
@@ -367,6 +419,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
             "prompt_hash": prompt_hash,
             "phase_completed": 2,
             "expanded_prompt": expanded_prompt_text,
+            "feature_title": feature_title,
             "steps": steps,
             "completed_steps": sorted(completed_steps_set),
             "skipped_steps": sorted(skipped_steps_set),
@@ -375,6 +428,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
     else:
         print(f"\n{COLOR_CYAN}{'─' * 60}")
         print(f"  PHASE 2: STEP DECOMPOSITION — SKIPPED (loaded from state)")
+        print(f"  Feature: {feature_title}")
         print(f"{'─' * 60}{COLOR_RESET}\n")
 
     # ═════════════════════════════════════════════════════════════════════════
@@ -386,6 +440,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
 
     print(f"\n{COLOR_CYAN}{'─' * 60}")
     print(f"  PHASE 3: STEP EXECUTION ({total_steps} steps total)")
+    print(f"  Feature: {feature_title}")
     if completed_count or skipped_count:
         print(f"  Resuming: {completed_count} completed, {skipped_count} skipped, "
               f"{total_steps - completed_count - skipped_count} remaining")
@@ -394,6 +449,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
     for step in steps:
         step_number = step["number"]
         step_title = step["title"]
+        step_category = step.get("category", "general")
         step_prompt = step["prompt"]
         step_source = step.get("source", cfg.source)
 
@@ -413,7 +469,11 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
         os.makedirs(step_dir, exist_ok=True)
 
         prefix = _step_prefix(step_number, total_steps)
-        _print_step_header(step_number, total_steps, step_title, completed_count, skipped_count)
+        _print_step_header(
+            step_number, total_steps, step_title,
+            step_category, feature_title,
+            completed_count, skipped_count,
+        )
 
         current_prompt = step_prompt
         retry_count = 0
@@ -461,6 +521,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
                     "prompt_hash": prompt_hash,
                     "phase_completed": 2,
                     "expanded_prompt": expanded_prompt_text,
+                    "feature_title": feature_title,
                     "steps": steps,
                     "completed_steps": sorted(completed_steps_set),
                     "skipped_steps": sorted(skipped_steps_set),
@@ -475,6 +536,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
                         "prompt_hash": prompt_hash,
                         "phase_completed": 2,
                         "expanded_prompt": expanded_prompt_text,
+                        "feature_title": feature_title,
                         "steps": steps,
                         "completed_steps": sorted(completed_steps_set),
                         "skipped_steps": sorted(skipped_steps_set),
@@ -495,6 +557,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
                         "prompt_hash": prompt_hash,
                         "phase_completed": 2,
                         "expanded_prompt": expanded_prompt_text,
+                        "feature_title": feature_title,
                         "steps": steps,
                         "completed_steps": sorted(completed_steps_set),
                         "skipped_steps": sorted(skipped_steps_set),
@@ -513,6 +576,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
                         "prompt_hash": prompt_hash,
                         "phase_completed": 2,
                         "expanded_prompt": expanded_prompt_text,
+                        "feature_title": feature_title,
                         "steps": steps,
                         "completed_steps": sorted(completed_steps_set),
                         "skipped_steps": sorted(skipped_steps_set),
@@ -523,8 +587,11 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
             user_result = confirm_step(step_number, step_title)
 
             if user_result["action"] == "continue":
-                # Accept: commit the changes
-                commit_msg = f"ai-steps: step {step_number}/{total_steps} - {step_title}"
+                # Accept: commit with structured message including category and feature
+                commit_msg = _format_commit_message(
+                    step_number, total_steps, step_title,
+                    step_category, feature_title,
+                )
                 committed = commit_changes(commit_msg, ignore_dir_name=cfg.script_dir_name)
                 if committed:
                     print(f"{prefix} ✓ Changes committed: {commit_msg}")
@@ -538,6 +605,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
                     "prompt_hash": prompt_hash,
                     "phase_completed": 2,
                     "expanded_prompt": expanded_prompt_text,
+                    "feature_title": feature_title,
                     "steps": steps,
                     "completed_steps": sorted(completed_steps_set),
                     "skipped_steps": sorted(skipped_steps_set),
@@ -554,6 +622,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
                     "prompt_hash": prompt_hash,
                     "phase_completed": 2,
                     "expanded_prompt": expanded_prompt_text,
+                    "feature_title": feature_title,
                     "steps": steps,
                     "completed_steps": sorted(completed_steps_set),
                     "skipped_steps": sorted(skipped_steps_set),
@@ -568,6 +637,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
                         "prompt_hash": prompt_hash,
                         "phase_completed": 2,
                         "expanded_prompt": expanded_prompt_text,
+                        "feature_title": feature_title,
                         "steps": steps,
                         "completed_steps": sorted(completed_steps_set),
                         "skipped_steps": sorted(skipped_steps_set),
@@ -590,6 +660,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
                     "prompt_hash": prompt_hash,
                     "phase_completed": 2,
                     "expanded_prompt": expanded_prompt_text,
+                    "feature_title": feature_title,
                     "steps": steps,
                     "completed_steps": sorted(completed_steps_set),
                     "skipped_steps": sorted(skipped_steps_set),
@@ -604,6 +675,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
                     "prompt_hash": prompt_hash,
                     "phase_completed": 2,
                     "expanded_prompt": expanded_prompt_text,
+                    "feature_title": feature_title,
                     "steps": steps,
                     "completed_steps": sorted(completed_steps_set),
                     "skipped_steps": sorted(skipped_steps_set),

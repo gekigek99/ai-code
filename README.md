@@ -78,6 +78,7 @@ A modular Python tool to run Anthropic Claude on your codebase, generate or upda
 - Source-list generation mode (`-gen-source`)
 - **Multi-step automated workflow** (`-ai-steps`): expands prompt → decomposes into steps → executes each with user confirmation and git commits
 - **Crash-resilient resume** (`-ai-steps -continue`): resumes an interrupted workflow from the last saved checkpoint
+- **Structured commit messages**: `[category: feature_title]: step X/Y - step_title` for clear git history
 
 ## Workflows
 
@@ -94,18 +95,25 @@ Asks Claude to recommend which files/directories are relevant for your prompt ba
 A fully automated workflow for complex tasks:
 
 1. **Phase 1 — Prompt Expansion**: Generates a source list for the minimal prompt, then asks Claude to expand it into a comprehensive implementation specification.
-2. **Phase 2 — Step Decomposition**: Generates a source list for the expanded prompt, then asks Claude to decompose it into ordered, atomic implementation steps (with per-step prompts and source lists).
+2. **Phase 2 — Step Decomposition**: Generates a source list for the expanded prompt, then asks Claude to decompose it into ordered, atomic implementation steps (with per-step prompts, source lists, and category labels). Also generates a `feature_title` for the overall change.
 3. **Phase 3 — Step Execution**: Iterates through each step:
    - Generates a fresh source list (files may have changed from previous steps).
    - Executes the step prompt against the source files.
-   - Displays live progress: `Step X/Y` with completed/skipped/remaining counts.
+   - Displays live progress: `Step X/Y` with completed/skipped/remaining counts and category/feature context.
    - Asks for user confirmation:
-     - **Accept**: commits the changes and proceeds to the next step.
+     - **Accept**: commits the changes with a structured message (`[category: feature]: step X/Y - title`) and proceeds.
      - **Retry**: reverts changes, optionally modifies the step prompt, and re-executes.
      - **Skip**: reverts changes and moves to the next step.
      - **Quit**: reverts changes and stops the workflow.
 
-**Requirements**: git must be available and the working tree must be clean. Each accepted step is committed, providing clean rollback points.
+**Commit message format**: Each accepted step is committed with a structured message:
+```
+[database: User Preferences]: step 1/5 - Add preferences table
+[api: User Preferences]: step 2/5 - Create CRUD endpoints
+[frontend: User Preferences]: step 3/5 - Build settings page
+```
+
+**Requirements**: git must be available and the working tree must be clean.
 
 ### `-ai-steps -continue` — Resume Interrupted Workflow
 
@@ -118,7 +126,7 @@ python ai-code.py -ai-steps -continue
 The workflow saves a checkpoint (`workflow-state.yaml`) after each phase and step. On resume:
 
 - **Prompt validation**: verifies that the prompt hasn't changed since the original run (starts fresh if it has).
-- **Phase skip**: phases that already completed (expansion, decomposition) are skipped — their results are loaded from the state file.
+- **Phase skip**: phases that already completed (expansion, decomposition) are skipped — their results (including `feature_title`) are loaded from the state file.
 - **Step skip**: steps that were already committed or skipped are bypassed.
 - **Dirty tree recovery**: if uncommitted changes are found (from a crash mid-step), they are automatically reverted before resuming.
 

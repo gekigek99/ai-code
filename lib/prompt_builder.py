@@ -20,6 +20,8 @@ Public API:
         -> str
         Build the meta-prompt text that instructs Claude to decompose an
         expanded prompt into ordered, atomic implementation steps.
+        Each step includes a ``category`` field for commit message context,
+        and the top-level YAML includes a ``feature_title`` field.
 """
 
 from typing import Any, Dict, List, Tuple
@@ -198,6 +200,13 @@ def build_stepize_meta_prompt(expanded_prompt: str) -> str:
     The meta-prompt tells Claude to produce ordered, atomic implementation
     steps in YAML format inside a ``+++++ ./steps.yaml [EDIT]`` block.
 
+    The YAML output includes:
+      - ``feature_title``: a short label for the overall feature being built
+        (used in git commit messages as the feature context).
+      - ``steps``: a list where each step has a ``category`` field indicating
+        the affected part of the system (e.g. "database", "admin", "api",
+        "frontend", "auth", "graphics", "config").
+
     Parameters
     ----------
     expanded_prompt : str
@@ -229,6 +238,9 @@ Analyze the provided source files and the specification above, then decompose it
 For each step, provide:
 - **number**: Sequential integer starting from 1.
 - **title**: Short, descriptive title (e.g., "Add user preferences database table").
+- **category**: The primary area of the system affected by this step. Use one of these labels (or a concise custom label if none fit):
+  ``database``, ``api``, ``backend``, ``frontend``, ``admin``, ``auth``, ``graphics``, ``config``, ``doctor``, ``patient``, ``search``, ``payment``, ``email``, ``upload``, ``testing``, ``infra``.
+  Pick the single most relevant category. This is used in commit messages for quick identification.
 - **prompt**: The COMPLETE, DETAILED prompt that should be sent to an AI to implement this step. Include:
   - What to create/modify/delete
   - Specific requirements and constraints
@@ -241,13 +253,17 @@ For each step, provide:
   - Configuration files if relevant
   - Keep this list focused — don't include unnecessary files.
 
+Additionally, provide a top-level **feature_title** — a concise label (2-6 words) summarising the overall feature or change being implemented across all steps. This is used as the feature context in git commit messages.
+
 TARGET: Aim for 3-10 steps depending on complexity. Prefer more granular steps over fewer large ones.
 
 OUTPUT FORMAT: Write the step decomposition as YAML inside a single file block:
 {_marker()} ./steps.yaml [EDIT]
+feature_title: "Short feature description"
 steps:
   - number: 1
     title: "Example step title"
+    category: "database"
     prompt: |
       Detailed implementation prompt for this step...
       Include all context needed.
@@ -256,6 +272,7 @@ steps:
       - ./path/to/another/file.ext
   - number: 2
     title: "Next step title"
+    category: "api"
     prompt: |
       ...
     source:

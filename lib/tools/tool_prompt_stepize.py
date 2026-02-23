@@ -4,6 +4,7 @@ lib.tools.tool_prompt_stepize — decompose a prompt into ordered implementation
 Public API:
     stepize_prompt(cfg, expanded_prompt, source_paths) -> dict
         Ask Claude to break an expanded prompt into atomic, ordered steps.
+        Returns steps with ``category`` fields and a ``feature_title``.
 """
 
 import os
@@ -52,17 +53,19 @@ def stepize_prompt(
     Returns
     -------
     dict
-        ``status``       — ``"ok"`` | ``"error"``
-        ``steps``        — list[dict] of step definitions (empty on error)
-        ``raw_response`` — full Claude response text
-        ``thinking``     — thinking content (if extended thinking enabled)
-        ``error``        — error message (None on success)
+        ``status``          — ``"ok"`` | ``"error"``
+        ``steps``           — list[dict] of step definitions (empty on error)
+        ``feature_title``   — str, short label for the overall feature
+        ``raw_response``    — full Claude response text
+        ``thinking``        — thinking content (if extended thinking enabled)
+        ``error``           — error message (None on success)
 
     Each step dict has keys:
-        ``number``  — int, 1-based step index
-        ``title``   — str, human-readable step title
-        ``prompt``  — str, the full prompt text for implementing the step
-        ``source``  — list[str], file/directory paths needed for the step
+        ``number``    — int, 1-based step index
+        ``title``     — str, human-readable step title
+        ``category``  — str, affected system area (e.g. "database", "api", "admin")
+        ``prompt``    — str, the full prompt text for implementing the step
+        ``source``    — list[str], file/directory paths needed for the step
     """
     if exclude_patterns is None:
         exclude_patterns = cfg.exclude_patterns
@@ -117,6 +120,7 @@ def stepize_prompt(
         return {
             "status": "error",
             "steps": [],
+            "feature_title": "",
             "raw_response": result.get("data_response", ""),
             "thinking": result.get("thinking_content", ""),
             "error": error_msg,
@@ -154,6 +158,7 @@ def stepize_prompt(
         return {
             "status": "error",
             "steps": [],
+            "feature_title": "",
             "raw_response": data_response,
             "thinking": thinking_content,
             "error": "No steps.yaml block found in Claude response",
@@ -164,19 +169,28 @@ def stepize_prompt(
         parsed = yaml.safe_load(steps_yaml)
         if isinstance(parsed, dict):
             raw_steps = parsed.get("steps", [])
+            # Extract the top-level feature_title for commit messages
+            feature_title = parsed.get("feature_title", "")
         elif isinstance(parsed, list):
             raw_steps = parsed
+            feature_title = ""
         else:
             raw_steps = []
+            feature_title = ""
     except yaml.YAMLError as e:
         print(f"[tool_prompt_stepize] WARNING: Failed to parse steps YAML: {e}")
         return {
             "status": "error",
             "steps": [],
+            "feature_title": "",
             "raw_response": data_response,
             "thinking": thinking_content,
             "error": f"Failed to parse steps YAML: {e}",
         }
+
+    # Ensure feature_title is a non-empty string; fall back to a generic label
+    if not feature_title or not isinstance(feature_title, str):
+        feature_title = "ai-steps"
 
     # Normalise step dicts to ensure required keys exist
     steps: List[Dict[str, Any]] = []
@@ -188,9 +202,14 @@ def stepize_prompt(
         step = {
             "number": raw_step.get("number", i + 1),
             "title": raw_step.get("title", f"Step {i + 1}"),
+            "category": raw_step.get("category", "general"),
             "prompt": raw_step.get("prompt", ""),
             "source": raw_step.get("source", []),
         }
+
+        # Ensure category is a non-empty string
+        if not step["category"] or not isinstance(step["category"], str):
+            step["category"] = "general"
 
         # Ensure source is a list of strings
         if isinstance(step["source"], str):
@@ -205,13 +224,15 @@ def stepize_prompt(
     # Save the parsed steps
     export_md_file(steps_yaml, "steps.yaml", output_dir)
 
-    print(f"\n[tool_prompt_stepize] Decomposed into {len(steps)} step(s):")
+    print(f"\n[tool_prompt_stepize] Feature: {feature_title}")
+    print(f"[tool_prompt_stepize] Decomposed into {len(steps)} step(s):")
     for step in steps:
-        print(f"  Step {step['number']}: {step['title']} ({len(step['source'])} source entries)")
+        print(f"  Step {step['number']} [{step['category']}]: {step['title']} ({len(step['source'])} source entries)")
 
     return {
         "status": "ok",
         "steps": steps,
+        "feature_title": feature_title,
         "raw_response": data_response,
         "thinking": thinking_content,
         "error": None,
