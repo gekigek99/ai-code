@@ -68,7 +68,8 @@ def get_directory_tree(
     -------
     (clean_tree, ai_file_listing) : tuple[str, str]
         *clean_tree* — ANSI-free, human-readable tree string.
-        *ai_file_listing* — one ``./relative/path`` per line for LLM consumption.
+        *ai_file_listing* — one ``./relative/path`` per line for LLM consumption,
+        with token estimates appended for files included in the AI context.
     """
     base_dirs = _resolve_tree_dirs(base_dirs)
 
@@ -77,7 +78,11 @@ def get_directory_tree(
 
     display_lines: List[str] = []
     clean_lines: List[str] = []
-    ai_file_paths: List[str] = []
+
+    # Each entry is (relative_path, token_estimate_or_None).
+    # token_estimate is populated only for files present in files_to_ai
+    # (i.e. files whose content is shared with the LLM).
+    ai_file_entries: List[Tuple[str, Optional[int]]] = []
 
     files_to_ai = files_to_ai or []
     files_to_ai_norm = {
@@ -120,9 +125,12 @@ def get_directory_tree(
             filedata = files_to_ai_norm.get(os.path.normcase(os.path.abspath(abs_path)))
 
             if os.path.isfile(abs_path):
-                # Collect relative path for AI listing
+                # Collect relative path and token estimate for AI listing
                 rel_to_root = "./" + os.path.relpath(abs_path, project_root).replace("\\", "/")
-                ai_file_paths.append(rel_to_root)
+                token_est = None
+                if filedata:
+                    token_est = getattr(filedata, "ai_data_tokens", None)
+                ai_file_entries.append((rel_to_root, token_est))
 
                 try:
                     size_kb = os.path.getsize(abs_path) / 1024
@@ -132,7 +140,6 @@ def get_directory_tree(
                 pad = base_name.ljust(20)[len(base_name):]
 
                 if filedata:
-                    token_est = getattr(filedata, "ai_data_tokens", None)
                     token_str = f"~{token_est:5.0f} tokens" if token_est is not None else "~N/A tokens"
                     display_entry = (
                         f"{COLOR_GREEN}{base_name} {pad} "
@@ -194,9 +201,15 @@ def get_directory_tree(
     # Clean tree for export (no ANSI)
     clean_tree = "\n".join(clean_lines)
 
-    # Flat AI file listing
+    # Flat AI file listing with token estimates for shared files.
+    # Files included in the AI context show their approximate token count
+    # so Claude can gauge the relative size/importance of each file.
     ai_listing_parts = ["Project file structure:"]
-    ai_listing_parts.extend(ai_file_paths)
+    for file_path, token_est in ai_file_entries:
+        if token_est is not None:
+            ai_listing_parts.append(f"{file_path}  (~{token_est} tokens)")
+        else:
+            ai_listing_parts.append(file_path)
     ai_file_listing = "\n".join(ai_listing_parts)
 
     return clean_tree, ai_file_listing
