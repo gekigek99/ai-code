@@ -4,7 +4,9 @@ source: [
 
 exclude_patterns: [
   ".git*",
-  "ai-code/",
+  "logs/",
+  "lib/__pycache__/",
+  "__pycache__/",
   "*.log",
   "*.bat"
 ]
