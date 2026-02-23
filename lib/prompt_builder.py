@@ -10,6 +10,16 @@ Public API:
     generate_prompt_for_gen_source(prompt, source, tree_str)
         -> list[dict]
         Build the message-content parts for the ``-gen-source`` workflow.
+
+    build_expand_meta_prompt(minimal_prompt)
+        -> str
+        Build the meta-prompt text that instructs Claude to expand a minimal
+        prompt into a comprehensive implementation specification.
+
+    build_stepize_meta_prompt(expanded_prompt)
+        -> str
+        Build the meta-prompt text that instructs Claude to decompose an
+        expanded prompt into ordered, atomic implementation steps.
 """
 
 from typing import Any, Dict, List, Tuple
@@ -124,3 +134,138 @@ def generate_prompt_for_gen_source(
         },
     ]
     return parts
+
+
+def build_expand_meta_prompt(minimal_prompt: str) -> str:
+    """Build the meta-prompt that instructs Claude to expand a minimal prompt.
+
+    The meta-prompt tells Claude to produce a detailed implementation
+    specification WITHOUT implementing any code.  The result should be
+    written to a ``+++++ ./expanded-prompt.md [EDIT]`` block.
+
+    Parameters
+    ----------
+    minimal_prompt : str
+        The user's original minimal prompt to expand.
+
+    Returns
+    -------
+    str
+        The meta-prompt text to be used as the ``prompt`` argument in
+        ``build_message_content()``.
+    """
+    return f"""TASK: You are a senior technical architect. Your job is to expand a minimal implementation prompt into a comprehensive, detailed implementation specification.
+
+IMPORTANT: Do NOT implement any code. Do NOT write any code files. Only produce the expanded specification text.
+
+MINIMAL PROMPT TO EXPAND:
+--- BEGIN MINIMAL PROMPT ---
+{minimal_prompt}
+--- END MINIMAL PROMPT ---
+
+INSTRUCTIONS:
+Analyze the provided source files and the minimal prompt above, then produce a comprehensive implementation specification that covers:
+
+1. **Objective Summary**: Clear statement of what needs to be accomplished.
+2. **Current State Analysis**: What exists today in the codebase that is relevant.
+3. **Detailed Requirements**: Every specific change needed, broken down by file/module:
+   - Database schema changes (tables, columns, constraints, indexes, migrations)
+   - API route changes (new endpoints, modified endpoints, removed endpoints)
+   - Controller/business logic changes
+   - Frontend/view changes
+   - Configuration changes
+4. **Data Flow**: How data moves through the system for each new feature/change.
+5. **Edge Cases and Error Handling**: What could go wrong and how to handle it.
+6. **Security Considerations**: Authentication, authorization, input validation, etc.
+7. **Dependencies**: New packages, services, or external APIs needed.
+8. **File-by-file Change List**: Explicit list of every file to create, modify, or delete.
+
+Be exhaustive. The expanded specification will be used to generate atomic implementation steps,
+so every detail matters. Reference specific files, function names, and database tables from
+the provided source code.
+
+OUTPUT FORMAT: Write your complete expanded specification inside a single file block:
+{_marker()} ./expanded-prompt.md [EDIT]
+<your comprehensive specification here>
+{_marker()}
+
+Do not include any other file blocks. Only the expanded-prompt.md block."""
+
+
+def build_stepize_meta_prompt(expanded_prompt: str) -> str:
+    """Build the meta-prompt that instructs Claude to decompose a prompt into steps.
+
+    The meta-prompt tells Claude to produce ordered, atomic implementation
+    steps in YAML format inside a ``+++++ ./steps.yaml [EDIT]`` block.
+
+    Parameters
+    ----------
+    expanded_prompt : str
+        The comprehensive implementation specification to decompose.
+
+    Returns
+    -------
+    str
+        The meta-prompt text to be used as the ``prompt`` argument in
+        ``build_message_content()``.
+    """
+    return f"""TASK: You are a senior technical architect. Your job is to decompose an implementation specification into ordered, atomic implementation steps.
+
+IMPORTANT: Do NOT implement any code. Do NOT write any code files. Only produce the step decomposition in YAML format.
+
+IMPLEMENTATION SPECIFICATION TO DECOMPOSE:
+--- BEGIN SPECIFICATION ---
+{expanded_prompt}
+--- END SPECIFICATION ---
+
+INSTRUCTIONS:
+Analyze the provided source files and the specification above, then decompose it into ordered implementation steps. Each step must be:
+
+1. **Atomic**: Implements one logical unit of work (e.g., one database migration, one API endpoint, one UI component).
+2. **Independent**: Can be implemented and tested without depending on steps that come after it.
+3. **Ordered**: Steps are sequenced so that dependencies are satisfied (e.g., database before API, API before frontend).
+4. **Self-contained**: Each step's prompt includes ALL context needed — an AI receiving only that step's prompt and source files can implement it correctly.
+
+For each step, provide:
+- **number**: Sequential integer starting from 1.
+- **title**: Short, descriptive title (e.g., "Add user preferences database table").
+- **prompt**: The COMPLETE, DETAILED prompt that should be sent to an AI to implement this step. Include:
+  - What to create/modify/delete
+  - Specific requirements and constraints
+  - Expected behavior and edge cases
+  - References to relevant existing code
+  - The step prompt should be self-sufficient — include enough context that it can be understood without the other steps.
+- **source**: List of file/directory paths that the AI needs to see to implement this step. Include:
+  - Files to be modified
+  - Files that contain referenced interfaces/types/models
+  - Configuration files if relevant
+  - Keep this list focused — don't include unnecessary files.
+
+TARGET: Aim for 3-10 steps depending on complexity. Prefer more granular steps over fewer large ones.
+
+OUTPUT FORMAT: Write the step decomposition as YAML inside a single file block:
+{_marker()} ./steps.yaml [EDIT]
+steps:
+  - number: 1
+    title: "Example step title"
+    prompt: |
+      Detailed implementation prompt for this step...
+      Include all context needed.
+    source:
+      - ./path/to/relevant/file.ext
+      - ./path/to/another/file.ext
+  - number: 2
+    title: "Next step title"
+    prompt: |
+      ...
+    source:
+      - ...
+{_marker()}
+
+Do not include any other file blocks. Only the steps.yaml block."""
+
+
+def _marker() -> str:
+    """Return the 5-plus-sign marker string without triggering the pattern
+    in this source file itself (which would confuse ai-code's own parser)."""
+    return "+" * 5

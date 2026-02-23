@@ -19,14 +19,26 @@ A modular Python tool to run Anthropic Claude on your codebase, generate or upda
     ├── images.py                # Image processing: media type detection, base64 encoding
     ├── pdf.py                   # PDF text extraction (PyMuPDF)
     ├── tree.py                  # Directory tree building
-    ├── git.py                   # Git utilities (uncommitted changes check)
+    ├── git.py                   # Git utilities (uncommitted changes, commit, revert)
     ├── export.py                # Markdown export, prompt logging
     ├── validation.py            # Response validation, block_pattern regex
     ├── apply.py                 # File application logic (write/move/delete)
     ├── prompt_builder.py        # Message/content assembly for AI calls
-    └── providers/
-        ├── __init__.py          # Provider package init
-        └── claude.py            # Claude-specific: prompt_claude(), streaming, websearch
+    ├── providers/
+    │   ├── __init__.py          # Provider package init
+    │   └── claude.py            # Claude-specific: prompt_claude(), streaming, websearch
+    ├── tools/                   # Reusable workflow tool functions
+    │   ├── __init__.py          # Package init
+    │   ├── tool_source_generate.py   # Generate source file list via Claude
+    │   ├── tool_prompt_execute.py    # Execute prompt: discover → build → call → validate → apply
+    │   ├── tool_prompt_expand.py     # Expand minimal prompt into detailed specification
+    │   ├── tool_prompt_stepize.py    # Decompose prompt into ordered implementation steps
+    │   └── tool_user_confirm.py      # Interactive user confirmation/feedback
+    └── workflows/               # High-level workflow orchestrators
+        ├── __init__.py          # Package init
+        ├── workflow_ai.py            # Standard single-shot execution (-ai)
+        ├── workflow_gen_source.py     # Source list generation (-gen-source)
+        └── workflow_ai_steps.py      # Automated multi-step pipeline (-ai-steps)
 ./logs/
     ├── prompt.log               # Prompt history
     ├── userfullprompt.md        # Full assembled prompt export
@@ -39,7 +51,15 @@ A modular Python tool to run Anthropic Claude on your codebase, generate or upda
         ├── gen-source-clauderesponse.md
         ├── gen-source-recv.md
         ├── gen-source-thinking.md
-        └── gen-source-rawdata.md
+        ├── gen-source-rawdata.md
+        └── ai-steps/            # Multi-step workflow artifacts
+            ├── expanded-prompt.md
+            ├── steps.yaml
+            ├── phase1-expand/
+            ├── phase2-stepize/
+            ├── step-1/
+            ├── step-2/
+            └── step-N/
 ```
 
 ## Features
@@ -55,12 +75,40 @@ A modular Python tool to run Anthropic Claude on your codebase, generate or upda
 - Web search integration (optional)
 - Extended thinking support
 - Source-list generation mode (`-gen-source`)
+- **Multi-step automated workflow** (`-ai-steps`): expands prompt → decomposes into steps → executes each with user confirmation and git commits
+
+## Workflows
+
+### `-ai` — Standard Execution
+
+Single-shot workflow: sends your prompt and source files to Claude, validates the response, and applies file edits to disk.
+
+### `-gen-source` — Source List Generation
+
+Asks Claude to recommend which files/directories are relevant for your prompt based on the project's directory tree. Useful for narrowing down the source list before a large refactoring.
+
+### `-ai-steps` — Automated Multi-Step Pipeline
+
+A fully automated workflow for complex tasks:
+
+1. **Phase 1 — Prompt Expansion**: Generates a source list for the minimal prompt, then asks Claude to expand it into a comprehensive implementation specification.
+2. **Phase 2 — Step Decomposition**: Generates a source list for the expanded prompt, then asks Claude to decompose it into ordered, atomic implementation steps (with per-step prompts and source lists).
+3. **Phase 3 — Step Execution**: Iterates through each step:
+   - Generates a fresh source list (files may have changed from previous steps).
+   - Executes the step prompt against the source files.
+   - Asks for user confirmation:
+     - **Accept**: commits the changes and proceeds to the next step.
+     - **Retry**: reverts changes, optionally modifies the step prompt, and re-executes.
+     - **Skip**: reverts changes and moves to the next step.
+     - **Quit**: reverts changes and stops the workflow.
+
+**Requirements**: git must be available and the working tree must be clean. Each accepted step is committed, providing clean rollback points.
 
 ## Prerequisites
 
 - Python 3.8+
 - Anthropic API key for Claude
-- Git (advised but optional — used for safety checks)
+- Git (required for `-ai-steps`, advised for `-ai`)
 
 ## Installation
 
@@ -126,6 +174,7 @@ WEBSEARCH_MAX_RESULTS: 5
 | `python ai-code.py -ai -f` | Force — skip uncommitted git changes check |
 | `python ai-code.py -last` | Re-apply last saved Claude response |
 | `python ai-code.py -gen-source` | Ask Claude to generate a recommended source list |
+| `python ai-code.py -ai-steps` | Run automated multi-step workflow |
 | `python ai-code.py -pdf` | Include PDF text content in AI context |
 | `python ai-code.py -img path/to/image.png` | Attach image(s) to the prompt |
 | `python ai-code.py -h` | Show full help with all flags |
@@ -137,6 +186,16 @@ Flags can be combined: `python ai-code.py -ai -f -pdf -img screenshot.png`
 Add glob patterns in `exclude_patterns`, e.g.: `*.pyc`, `.env*`, `node_modules/`.
 
 Multi-level patterns with `/` are supported: `src/generated/`.
+
+## Tool Architecture
+
+The codebase follows a three-layer architecture:
+
+1. **Infrastructure** (`lib/`): Low-level modules for file I/O, API calls, validation, etc.
+2. **Tools** (`lib/tools/`): Reusable, stateless functions that compose infrastructure modules into well-defined operations (source generation, prompt execution, expansion, step decomposition, user confirmation).
+3. **Workflows** (`lib/workflows/`): High-level orchestrators that compose tools into complete CLI workflows (`-ai`, `-gen-source`, `-ai-steps`).
+
+Each tool returns a structured dict with at minimum a `status` key (`"ok"` or `"error"`), making error handling consistent across all workflows.
 
 ---
 

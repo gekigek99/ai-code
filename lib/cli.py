@@ -36,6 +36,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "  python ai-code.py -ai -img a.png  Attach image(s) to the prompt\n"
             "  python ai-code.py -last            Re-apply last saved Claude response\n"
             "  python ai-code.py -gen-source      Ask Claude to generate a source list\n"
+            "  python ai-code.py -ai-steps        Run multi-step automated workflow\n"
         ),
     )
 
@@ -72,6 +73,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "current prompt.  The result is copied to the clipboard and "
             "saved as gen-source-clauderesponse.md.  The normal -ai flow "
             "is NOT executed when this flag is present."
+        ),
+    )
+
+    parser.add_argument(
+        "-ai-steps",
+        action="store_true",
+        dest="run_ai_steps",
+        help=(
+            "Run the automated multi-step AI workflow:\n"
+            "  Phase 1: Expand the minimal prompt into a detailed specification.\n"
+            "  Phase 2: Decompose the specification into ordered steps.\n"
+            "  Phase 3: Execute each step with user confirmation and git commits.\n"
+            "Requires git to be available and the working tree to be clean."
         ),
     )
 
