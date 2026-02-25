@@ -12,8 +12,8 @@ Public API:
         after a crash or connection loss.
 
 Commit message format:
-    [category: feature_title]: ai-step X/Y - step_title
-    e.g. [database: User Preferences]: ai-step 1/5 - Add preferences table
+    feature_title: category: ai-step X/Y - step_title
+    e.g. User Preferences: database: ai-step 1/5 - Add preferences table
 """
 
 import hashlib
@@ -121,8 +121,8 @@ def _format_commit_message(
 ) -> str:
     """Build a structured commit message with category and feature context.
 
-    Format: ``[category: feature_title]: ai-step X/Y - step_title``
-    e.g.  ``[database: User Preferences]: ai-step 1/5 - Add preferences table``
+    Format: ``feature_title: category: ai-step X/Y - step_title``
+    e.g.  ``User Preferences: database: ai-step 1/5 - Add preferences table``
 
     Parameters
     ----------
@@ -137,7 +137,7 @@ def _format_commit_message(
     feature_title : str
         Overall feature label (e.g. "User Preferences").
     """
-    return f"[{step_category}: {feature_title}]: ai-step {step_number}/{total_steps} - {step_title}"
+    return f"{feature_title}: {step_category}: ai-step {step_number}/{total_steps} - {step_title}"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -190,7 +190,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
 
     This workflow requires git to be available.  Each accepted step is
     committed with a structured message:
-    ``[category: feature_title]: ai-step X/Y - step_title``
+    ``feature_title: category: ai-step X/Y - step_title``
 
     When ``args.continue_steps`` is True, the workflow resumes from the
     last saved checkpoint — skipping already-completed phases and steps.
