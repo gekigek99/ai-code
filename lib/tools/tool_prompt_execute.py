@@ -3,8 +3,9 @@ lib.tools.tool_prompt_execute — execute a prompt against source files via Clau
 
 Public API:
     execute_prompt(cfg, prompt, source_paths, ...) -> dict
-        Full pipeline: discover files → build tree → assemble message →
-        call Claude → validate → optionally apply → export artifacts.
+        Full pipeline: discover files → build tree → build memory context →
+        assemble message → call Claude → validate → optionally apply →
+        export artifacts → update long-term memory.
 """
 
 import os
@@ -15,6 +16,7 @@ from lib.files import FileData, add_source
 from lib.images import add_images
 from lib.tree import get_directory_tree
 from lib.prompt_builder import build_message_content
+from lib.memory import build_memory_block, update_long_term_memory
 from lib.providers.claude import prompt_claude
 from lib.validation import validate_claude_response
 from lib.apply import claude_data_to_file
@@ -33,8 +35,16 @@ def execute_prompt(
     apply_to_disk: bool = True,
     output_dir: Optional[str] = None,
     label: str = "",
+    include_short_term_memory: bool = False,
 ) -> Dict[str, Any]:
     """Execute a full prompt-to-application pipeline.
+
+    Orchestrates the complete flow from file discovery through Claude
+    invocation to disk application and memory update.  Memory context
+    (long-term project memory, short-term workflow memory, git history)
+    is automatically loaded and injected into the prompt based on the
+    ``cfg`` memory settings.  After successful disk application, long-term
+    memory is auto-updated when ``cfg.memory_auto_update`` is True.
 
     Parameters
     ----------
@@ -58,6 +68,14 @@ def execute_prompt(
         Directory for saving artifacts.  Defaults to ``cfg.claude_output_dir``.
     label : str
         Prefix label for artifact filenames (e.g. ``"step-1-"``).
+    include_short_term_memory : bool
+        When True, short-term workflow memory (``short-term.md``) is
+        included in the memory block alongside long-term memory and git
+        history.  Typically True only for the ``-ai-steps`` workflow
+        where inter-step context matters.  Long-term memory and git
+        history inclusion are controlled by their own ``cfg`` toggles
+        and are always included when enabled — this flag only governs
+        the short-term component.
 
     Returns
     -------
@@ -69,6 +87,12 @@ def execute_prompt(
         ``files_applied``       — bool, whether file edits were applied
         ``original_abs_paths``  — set[str] of discovered source file paths
         ``error``               — error message (None on success)
+
+    Notes
+    -----
+    Memory update failure is non-fatal: the function still returns
+    ``"ok"`` even if memory update fails, since memory is a side effect
+    that must never block the primary execution pipeline.
     """
     if exclude_patterns is None:
         exclude_patterns = cfg.exclude_patterns
@@ -98,9 +122,19 @@ def execute_prompt(
         tree_dirs, exclude_patterns, files_to_ai,
     )
 
+    # ── 3b. Build memory context block ───────────────────────────────────────
+    # Assemble long-term memory, short-term memory (if requested), and git
+    # history into a single block for prompt injection.  This gives Claude
+    # project context before it sees any source files or the user prompt.
+    memory_block = build_memory_block(cfg, include_short_term=include_short_term_memory)
+    if memory_block:
+        print(f"[tool_prompt_execute] Memory block: {len(memory_block)} chars (~{len(memory_block) // 4} tokens)")
+
     # ── 4. Build message content ─────────────────────────────────────────────
+    # Pass the memory block so it is prepended as the first content item,
+    # establishing project context before source files and the user prompt.
     message_content, data_files = build_message_content(
-        files_to_ai, prompt, ai_file_listing,
+        files_to_ai, prompt, ai_file_listing, memory_block=memory_block,
     )
 
     # Approximate token estimate
@@ -108,8 +142,10 @@ def execute_prompt(
     print(f"\nInput tokens [ESTIMATED]: {estimated_tokens}")
 
     # ── 5. Export assembled prompt for record-keeping ────────────────────────
+    # Include the memory block in the exported prompt so developers can
+    # inspect exactly what context Claude received for debugging purposes.
     export_md_file(
-        "\n\n".join([cfg.system, prompt, ai_file_listing, data_files]),
+        "\n\n".join([cfg.system, memory_block, prompt, ai_file_listing, data_files]),
         f"{label}userfullprompt.md",
         output_dir,
     )
@@ -194,6 +230,20 @@ def execute_prompt(
         )
         export_md_file(raw_data_str, f"{label}rawdata.md", output_dir)
         print(f"[Saved {len(result['raw_data'])} raw events to file]")
+
+    # ── 10. Update long-term project memory ──────────────────────────────────
+    # Triggered only when memory is enabled, auto-update is on, and changes
+    # were actually applied to disk.  Failure is non-fatal — the function
+    # still returns "ok" because memory is a side effect that must never
+    # block the primary execution pipeline.
+    if cfg.memory_enabled and cfg.memory_auto_update and apply_to_disk:
+        print("[tool_prompt_execute] Updating long-term project memory...")
+        source_summary = "\n".join(f"- {f.path_rel}" for f in files_to_ai if f.ai_share)
+        memory_updated = update_long_term_memory(cfg, data_response, source_summary)
+        if memory_updated:
+            print("[tool_prompt_execute] ✓ Project memory updated")
+        else:
+            warn("[tool_prompt_execute] ⚠ Project memory update failed (non-fatal)")
 
     return {
         "status": "ok",
