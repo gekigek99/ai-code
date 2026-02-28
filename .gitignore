@@ -10,7 +10,4 @@ logs/
 ai-code-prompt.yaml
 
 # Memory:
-# Short-term is ephemeral workflow state (ai-steps), not version controlled.
-# Long-term is tracked in git for cross-session persistence.
-memory/short-term.md
-memory/short-term.md.tmp
+memory/
