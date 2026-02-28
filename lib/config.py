@@ -89,6 +89,17 @@ class Config:
     logs_dir: str             # <script_dir>/logs/
     claude_output_dir: str    # <script_dir>/logs/claude/
 
+    # ── Memory ───────────────────────────────────────────────────────────────
+    memory_enabled: bool              # Master toggle for entire memory system
+    memory_long_term_enabled: bool    # Toggle long-term project memory (memory/project.md)
+    memory_short_term_enabled: bool   # Toggle short-term ai-steps memory (memory/short-term.md)
+    memory_git_history_enabled: bool  # Toggle git history context (last N commits)
+    memory_git_history_commits: int   # Number of recent commits to include
+    memory_long_term_max_tokens: int  # Soft cap: triggers compaction when exceeded
+    memory_short_term_max_tokens: int # Soft cap for short-term memory
+    memory_auto_update: bool          # Auto-update project memory after each execution
+    memory_dir: str                   # <script_dir>/memory/
+
 
 def load_config(script_dir: str) -> Config:
     """Read ``ai-code-prompt.yaml`` from *script_dir* and return a Config.
@@ -122,6 +133,13 @@ def load_config(script_dir: str) -> Config:
     exclude_patterns = raw.get("exclude_patterns") or []
     prompt = raw.get("prompt") or ""
 
+    # Always exclude the memory directory from source context — memory files
+    # have their own dedicated injection path and must never be bundled as
+    # regular source code.  Appended unconditionally so that user configs
+    # cannot accidentally include memory content in the source payload.
+    if "memory/" not in exclude_patterns:
+        exclude_patterns.append("memory/")
+
     # Build the full system prompt by appending the file-output-pattern suffix
     raw_system = raw.get("system") or ""
     system = raw_system + _FILE_OUTPUT_PATTERN_SUFFIX
@@ -140,14 +158,31 @@ def load_config(script_dir: str) -> Config:
     websearch = bool(raw.get("WEBSEARCH", False))
     websearch_max_results = int(raw.get("WEBSEARCH_MAX_RESULTS", 5))
 
+    # ── Memory ───────────────────────────────────────────────────────────────
+    # Follows the same nested-dict pattern as ANTHROPIC: grab the sub-dict
+    # first, then pull individual keys with defaults.  Every key has a
+    # sensible default so an entirely absent MEMORY section still yields a
+    # working (enabled) memory subsystem.
+    memory = raw.get("MEMORY", {})
+    memory_enabled = bool(memory.get("ENABLED", True))
+    memory_long_term_enabled = bool(memory.get("LONG_TERM_ENABLED", True))
+    memory_short_term_enabled = bool(memory.get("SHORT_TERM_ENABLED", True))
+    memory_git_history_enabled = bool(memory.get("GIT_HISTORY_ENABLED", True))
+    memory_git_history_commits = int(memory.get("GIT_HISTORY_COMMITS", 30))
+    memory_long_term_max_tokens = int(memory.get("LONG_TERM_MAX_TOKENS", 2000))
+    memory_short_term_max_tokens = int(memory.get("SHORT_TERM_MAX_TOKENS", 1000))
+    memory_auto_update = bool(memory.get("AUTO_UPDATE", True))
+
     # ── Paths ────────────────────────────────────────────────────────────────
     script_dir_name = os.path.basename(script_dir)
     logs_dir = os.path.join(script_dir, "logs")
     claude_output_dir = os.path.join(logs_dir, "claude")
+    memory_dir = os.path.join(script_dir, "memory")
 
     # Ensure output directories exist
     os.makedirs(logs_dir, exist_ok=True)
     os.makedirs(claude_output_dir, exist_ok=True)
+    os.makedirs(memory_dir, exist_ok=True)
 
     return Config(
         source=source,
@@ -166,4 +201,13 @@ def load_config(script_dir: str) -> Config:
         script_dir_name=script_dir_name,
         logs_dir=logs_dir,
         claude_output_dir=claude_output_dir,
+        memory_enabled=memory_enabled,
+        memory_long_term_enabled=memory_long_term_enabled,
+        memory_short_term_enabled=memory_short_term_enabled,
+        memory_git_history_enabled=memory_git_history_enabled,
+        memory_git_history_commits=memory_git_history_commits,
+        memory_long_term_max_tokens=memory_long_term_max_tokens,
+        memory_short_term_max_tokens=memory_short_term_max_tokens,
+        memory_auto_update=memory_auto_update,
+        memory_dir=memory_dir,
     )

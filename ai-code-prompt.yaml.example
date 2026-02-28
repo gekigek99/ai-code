@@ -51,3 +51,16 @@ ANTHROPIC:
 # included in the message_content sent to Claude (DuckDuckGo).
 WEBSEARCH: false
 WEBSEARCH_MAX_RESULTS: 5
+
+# Memory system: provides Claude with persistent context across invocations.
+# Long-term memory tracks project architecture, short-term tracks ai-steps workflow state,
+# git history provides recent commit context.
+MEMORY:
+  ENABLED: true                    # Master toggle for entire memory system
+  LONG_TERM_ENABLED: true          # Toggle long-term project memory (memory/project.md)
+  SHORT_TERM_ENABLED: true         # Toggle short-term ai-steps memory (memory/short-term.md)
+  GIT_HISTORY_ENABLED: true        # Toggle git history context (last N commits)
+  GIT_HISTORY_COMMITS: 30          # Number of recent commits to include
+  LONG_TERM_MAX_TOKENS: 2000      # Soft cap: triggers compaction when exceeded
+  SHORT_TERM_MAX_TOKENS: 1000     # Soft cap for short-term memory
+  AUTO_UPDATE: true                # Auto-update project memory after each execution
