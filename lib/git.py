@@ -14,6 +14,10 @@ Public API:
 
     revert_to_last_commit() -> bool
         Discard all uncommitted changes and untracked files.
+
+    get_recent_commits(n=30, ignore_dir_name=None) -> str
+        Return a condensed, token-efficient summary of the last *n* commits
+        including per-file numstat diffs.
 """
 
 import subprocess
@@ -169,3 +173,111 @@ def revert_to_last_commit() -> bool:
     except Exception as e:
         print(f"[git] Unexpected error during revert: {e}")
         return False
+
+
+def get_recent_commits(
+    n: int = 30,
+    ignore_dir_name: Optional[str] = None,
+) -> str:
+    """Return a condensed, token-efficient summary of the last *n* commits.
+
+    Uses ``git log --pretty --numstat`` to produce a compact history block
+    suitable for inclusion in LLM prompts without burning excessive tokens.
+
+    Parameters
+    ----------
+    n : int
+        Maximum number of commits to retrieve (default 30).
+    ignore_dir_name : str, optional
+        If provided, file-change lines whose filename contains this string
+        are silently dropped (useful for excluding AI output artifacts).
+
+    Returns
+    -------
+    str
+        Multi-line plain-text history block, or a parenthesised error
+        message if the history cannot be retrieved.
+    """
+    # Gate on git availability so callers never need to check separately
+    if not is_git_available():
+        return "(Git history unavailable — git not found)"
+
+    try:
+        result = subprocess.run(
+            [
+                "git", "log",
+                # COMMIT_START prefix makes parsing unambiguous even when
+                # commit subjects contain tab characters or digits
+                "--pretty=format:COMMIT_START %h %s",
+                "--numstat",
+                "-n", str(n),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except subprocess.TimeoutExpired:
+        return "(Git history unavailable — command timed out)"
+    except Exception:
+        return "(Git history unavailable — unexpected error)"
+
+    if result.returncode != 0:
+        return "(Git history unavailable — git log failed)"
+
+    raw = result.stdout.strip()
+    if not raw:
+        return "(No git history available)"
+
+    # --- Parse raw output into structured commit blocks ---
+    # Each commit block starts with a COMMIT_START line, followed by zero or
+    # more numstat lines (added\tremoved\tfilename).  Empty lines act as
+    # separators between commits.
+    commits: list[dict] = []
+    current: Optional[dict] = None
+
+    for line in raw.splitlines():
+        if line.startswith("COMMIT_START "):
+            # Flush previous commit if any
+            if current is not None:
+                commits.append(current)
+            # Parse "COMMIT_START <hash> <subject…>"
+            parts = line.split(" ", 2)  # ["COMMIT_START", hash, subject]
+            current = {
+                "hash": parts[1] if len(parts) > 1 else "???????",
+                "subject": parts[2] if len(parts) > 2 else "(no message)",
+                "files": [],
+            }
+        elif line.strip() == "":
+            # Blank separator line between commits — skip
+            continue
+        elif current is not None:
+            # Numstat line: "<added>\t<removed>\t<filename>"
+            tab_parts = line.split("\t", 2)
+            if len(tab_parts) == 3:
+                added, removed, filename = tab_parts
+
+                # Skip files belonging to the ignored directory
+                if ignore_dir_name and ignore_dir_name in filename:
+                    continue
+
+                # Binary files show "-" for both added and removed
+                if added == "-" and removed == "-":
+                    current["files"].append(f"  {filename} (binary)")
+                else:
+                    current["files"].append(f"  {filename} +{added} -{removed}")
+
+    # Flush the last commit
+    if current is not None:
+        commits.append(current)
+
+    if not commits:
+        return "(No git history available)"
+
+    # --- Build condensed output ---
+    lines: list[str] = [f"## Git History (last {n} commits)"]
+    for commit in commits:
+        lines.append(f"[{commit['hash']}] {commit['subject']}")
+        for file_line in commit["files"]:
+            lines.append(file_line)
+
+    return "\n".join(lines)
