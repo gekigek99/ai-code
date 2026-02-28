@@ -3,9 +3,9 @@ lib.tools.tool_prompt_execute — execute a prompt against source files via Clau
 
 Public API:
     execute_prompt(cfg, prompt, source_paths, ...) -> dict
-        Full pipeline: discover files → build tree → build memory context →
-        assemble message → call Claude → validate → optionally apply →
-        export artifacts → update long-term memory.
+        Full pipeline: discover files → optionally scan source to memory →
+        build tree → build memory context → assemble message → call Claude →
+        validate → optionally apply → export artifacts → update long-term memory.
 """
 
 import os
@@ -16,7 +16,11 @@ from lib.files import FileData, add_source
 from lib.images import add_images
 from lib.tree import get_directory_tree
 from lib.prompt_builder import build_message_content
-from lib.memory import build_memory_block, update_long_term_memory
+from lib.memory import (
+    build_memory_block,
+    update_long_term_memory,
+    update_long_term_memory_from_source,
+)
 from lib.providers.claude import prompt_claude
 from lib.validation import validate_claude_response
 from lib.apply import claude_data_to_file
@@ -36,6 +40,7 @@ def execute_prompt(
     output_dir: Optional[str] = None,
     label: str = "",
     include_short_term_memory: bool = False,
+    scan_source_to_memory: bool = False,
 ) -> Dict[str, Any]:
     """Execute a full prompt-to-application pipeline.
 
@@ -76,6 +81,14 @@ def execute_prompt(
         history inclusion are controlled by their own ``cfg`` toggles
         and are always included when enabled — this flag only governs
         the short-term component.
+    scan_source_to_memory : bool
+        When True, after discovering and reading source files, a
+        pre-execution memory update is triggered: file previews are sent
+        to Claude to update ``long-term.md`` with a codebase map.  This
+        ensures the memory reflects the *current* state of the codebase
+        before execution, which is critical during ai-steps where files
+        change between steps.  The updated memory is then included in
+        the prompt via ``build_memory_block()``.  Failure is non-fatal.
 
     Returns
     -------
@@ -117,6 +130,20 @@ def execute_prompt(
         files_to_ai, source_paths, exclude_patterns, ai_shared_file_types,
     )
 
+    # ── 2b. Source-scan memory update (pre-execution) ────────────────────────
+    # During ai-steps, the codebase evolves with each step.  Before executing
+    # the current step's prompt, scan the source files we just read and update
+    # long-term memory so it reflects the latest codebase state.  This gives
+    # Claude an accurate map of functions, variables, routes, and schema when
+    # the memory block is assembled in step 3b.
+    if scan_source_to_memory and cfg.memory_enabled and cfg.memory_long_term_enabled:
+        print("[tool_prompt_execute] Scanning source files to update long-term memory...")
+        scan_ok = update_long_term_memory_from_source(cfg, files_to_ai)
+        if scan_ok:
+            print("[tool_prompt_execute] ✓ Memory updated from source scan")
+        else:
+            warn("[tool_prompt_execute] ⚠ Source scan memory update failed (non-fatal)")
+
     # ── 3. Build directory tree ──────────────────────────────────────────────
     clean_tree, ai_file_listing = get_directory_tree(
         tree_dirs, exclude_patterns, files_to_ai,
@@ -126,6 +153,8 @@ def execute_prompt(
     # Assemble long-term memory, short-term memory (if requested), and git
     # history into a single block for prompt injection.  This gives Claude
     # project context before it sees any source files or the user prompt.
+    # NOTE: If scan_source_to_memory was True, the long-term memory was just
+    # updated in step 2b, so this block will contain the freshly scanned map.
     memory_block = build_memory_block(cfg, include_short_term=include_short_term_memory)
     if memory_block:
         print(f"[tool_prompt_execute] Memory block: {len(memory_block)} chars (~{len(memory_block) // 4} tokens)")
@@ -231,11 +260,11 @@ def execute_prompt(
         export_md_file(raw_data_str, f"{label}rawdata.md", output_dir)
         print(f"[Saved {len(result['raw_data'])} raw events to file]")
 
-    # ── 10. Update long-term project memory ──────────────────────────────────
+    # ── 10. Update long-term project memory (post-execution) ─────────────────
     # Triggered only when memory is enabled, auto-update is on, and changes
-    # were actually applied to disk.  Failure is non-fatal — the function
-    # still returns "ok" because memory is a side effect that must never
-    # block the primary execution pipeline.
+    # were actually applied to disk.  This captures *what changed* in memory,
+    # complementing the pre-execution source scan (step 2b) which captures
+    # the state *before* changes.  Failure is non-fatal.
     if cfg.memory_enabled and cfg.memory_auto_update and apply_to_disk:
         print("[tool_prompt_execute] Updating long-term project memory...")
         source_summary = "\n".join(f"- {f.path_rel}" for f in files_to_ai if f.ai_share)

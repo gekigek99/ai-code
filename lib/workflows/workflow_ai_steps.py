@@ -17,6 +17,10 @@ Public API:
         when all steps have been processed (completed or skipped), and
         persists on disk across ``-continue`` resumes and user quits.
 
+        Long-term memory is updated via source scanning before each step
+        execution (``scan_source_to_memory=True``), ensuring the memory
+        map always reflects the current codebase state as it evolves.
+
 Commit message format:
     feature_title: category: ai-step X/Y - step_title
     e.g. User Preferences: database: ai-step 1/5 - Add preferences table
@@ -282,6 +286,10 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
     Short-term memory is only cleared when all steps have been processed
     (completed or skipped), and persists across ``-continue`` resumes
     and user quits so the next session can pick up context.
+
+    Long-term memory is updated via source scanning before each step
+    execution (``scan_source_to_memory=True``), so the memory map always
+    reflects the current codebase state as it evolves across steps.
 
     When ``args.continue_steps`` is True, the workflow resumes from the
     last saved checkpoint — skipping already-completed phases and steps.
@@ -638,6 +646,10 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
             )
 
             print(f"\n{prefix} Executing step...")
+            # scan_source_to_memory=True triggers a pre-execution memory
+            # update: after reading source files, their previews are sent to
+            # Claude to refresh the codebase map in long-term.md.  This ensures
+            # the memory accurately reflects changes from previous steps.
             exec_result = execute_prompt(
                 cfg=cfg,
                 prompt=current_prompt,
@@ -645,7 +657,8 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
                 apply_to_disk=True,
                 output_dir=step_dir,
                 label=f"attempt-{retry_count}-",
-                include_short_term_memory=True,  # Include workflow context in prompt
+                include_short_term_memory=True,
+                scan_source_to_memory=True,
             )
 
             if exec_result["status"] != "ok":

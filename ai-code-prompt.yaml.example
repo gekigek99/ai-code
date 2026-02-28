@@ -57,7 +57,7 @@ WEBSEARCH_MAX_RESULTS: 5
 # git history provides recent commit context.
 MEMORY:
   ENABLED: true                    # Master toggle for entire memory system
-  LONG_TERM_ENABLED: true          # Toggle long-term project memory (memory/project.md)
+  LONG_TERM_ENABLED: true          # Toggle long-term project memory (memory/long-term.md)
   SHORT_TERM_ENABLED: true         # Toggle short-term ai-steps memory (memory/short-term.md)
   GIT_HISTORY_ENABLED: true        # Toggle git history context (last N commits)
   GIT_HISTORY_COMMITS: 30          # Number of recent commits to include

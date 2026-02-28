@@ -91,7 +91,7 @@ class Config:
 
     # ── Memory ───────────────────────────────────────────────────────────────
     memory_enabled: bool              # Master toggle for entire memory system
-    memory_long_term_enabled: bool    # Toggle long-term project memory (memory/project.md)
+    memory_long_term_enabled: bool    # Toggle long-term project memory (memory/long-term.md)
     memory_short_term_enabled: bool   # Toggle short-term ai-steps memory (memory/short-term.md)
     memory_git_history_enabled: bool  # Toggle git history context (last N commits)
     memory_git_history_commits: int   # Number of recent commits to include

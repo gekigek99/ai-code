@@ -1,4 +1,16 @@
+# Python bytecode
 __pycache__/
+*.pyc
+*.pyo
+
+# Logs and output artifacts
 logs/
 
+# Config contains API keys — never commit
 ai-code-prompt.yaml
+
+# Memory:
+# Short-term is ephemeral workflow state (ai-steps), not version controlled.
+# Long-term is tracked in git for cross-session persistence.
+memory/short-term.md
+memory/short-term.md.tmp
