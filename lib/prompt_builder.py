@@ -2,10 +2,13 @@
 lib.prompt_builder — message/content assembly for AI calls.
 
 Public API:
-    build_message_content(files_to_ai, prompt, ai_file_listing)
+    build_message_content(files_to_ai, prompt, ai_file_listing, memory_block="")
         -> (message_content: list, data_files: str)
         Assemble the message content list and the data-files text dump
-        from the collected FileData entries.
+        from the collected FileData entries.  An optional *memory_block*
+        (project memory, short-term memory, git history) is prepended as
+        the first content block so Claude has project context before
+        seeing source files.
 
     generate_prompt_for_gen_source(prompt, source, tree_str)
         -> list[dict]
@@ -35,18 +38,37 @@ def build_message_content(
     files_to_ai: List[FileData],
     prompt: str,
     ai_file_listing: str,
+    memory_block: str = "",
 ) -> Tuple[List[Dict[str, Any]], str]:
     """Assemble the ``message_content`` list sent to the LLM.
+
+    Parameters
+    ----------
+    files_to_ai : list[FileData]
+        Collected source/image files to share with the model.
+    prompt : str
+        The user prompt text.
+    ai_file_listing : str
+        Human-readable directory tree string.
+    memory_block : str, optional
+        Pre-formatted memory text (project memory, short-term memory,
+        git history).  If non-empty, prepended as the first content block
+        so Claude has project context before seeing source files.
 
     Returns
     -------
     (message_content, data_files) : tuple
         *message_content* — list of content blocks (text + image).
         *data_files* — concatenated text of all shared source files, used for
-        the exported ``userfullprompt.md``.
+        the exported ``userfullprompt.md``.  Does NOT include the memory block.
     """
     message_content: List[Dict[str, Any]] = []
     data_files = ""
+
+    # Inject memory block as the first content item so Claude sees project
+    # context before any source files, establishing a knowledge baseline.
+    if memory_block:
+        message_content.append({"type": "text", "text": memory_block})
 
     for file_to_ai in files_to_ai:
         if not file_to_ai.ai_share:
