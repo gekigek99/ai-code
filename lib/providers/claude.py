@@ -31,7 +31,13 @@ def prompt_claude(
     stream: bool = True,
     recv_path: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Call Anthropic Claude with streaming and return a structured result.
+    """Call Anthropic Claude and return a structured result.
+
+    Supports both streaming (``stream=True``) and synchronous
+    (``stream=False``) modes.  Streaming prints chunks in real time and
+    optionally appends them to *recv_path*.  Synchronous mode returns the
+    full response at once — used by lightweight internal calls such as
+    memory updates where real-time output is unnecessary.
 
     Parameters
     ----------
@@ -93,22 +99,44 @@ def prompt_claude(
         except Exception as e:
             print(f"[warn] Could not clear recv file {recv_path}: {e}")
 
-    # ── Start the API request ────────────────────────────────────────────────
+    # ── Build common API kwargs ──────────────────────────────────────────────
+    api_kwargs: Dict[str, Any] = {
+        "model": model,
+        "max_tokens": int(max_tokens),
+        "temperature": float(temperature),
+        "system": system,
+        "messages": messages,
+        "tools": tools if tools else [],
+        "thinking": (
+            {"type": "enabled", "budget_tokens": int(thinking_budget)}
+            if thinking_budget and int(thinking_budget) > 0
+            else {"type": "disabled"}
+        ),
+    }
+
+    # ── Dispatch to streaming or synchronous handler ─────────────────────────
+    if stream:
+        return _handle_streaming(client, api_kwargs, recv_path)
+    else:
+        return _handle_synchronous(client, api_kwargs)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Synchronous (non-streaming) handler
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _handle_synchronous(
+    client: Anthropic,
+    api_kwargs: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Handle a non-streaming API call.
+
+    When ``stream=False``, ``client.messages.create()`` returns a complete
+    ``Message`` object.  We extract text and thinking content directly from
+    the response's ``content`` blocks rather than iterating over events.
+    """
     try:
-        response_iter = client.messages.create(
-            model=model,
-            max_tokens=int(max_tokens),
-            temperature=float(temperature),
-            system=system,
-            messages=messages,
-            tools=tools if tools else [],
-            thinking=(
-                {"type": "enabled", "budget_tokens": int(thinking_budget)}
-                if thinking_budget and int(thinking_budget) > 0
-                else {"type": "disabled"}
-            ),
-            stream=bool(stream),
-        )
+        response = client.messages.create(**api_kwargs, stream=False)
     except Exception as e:
         return {
             "status": "error",
@@ -122,7 +150,78 @@ def prompt_claude(
     thinking_content = ""
     raw_data: List[Dict[str, Any]] = []
 
-    # ── Stream processing ────────────────────────────────────────────────────
+    try:
+        # Capture the raw response for debugging
+        raw_data.append({
+            "type": "message",
+            "event": str(response),
+        })
+
+        # Iterate over the content blocks in the completed Message object.
+        # Each block has a ``type`` attribute: "text", "thinking", "tool_use", etc.
+        for block in getattr(response, "content", []):
+            block_type = getattr(block, "type", None)
+
+            if block_type == "text":
+                text = getattr(block, "text", "") or ""
+                data_response += text
+
+            elif block_type == "thinking":
+                thinking_content += getattr(block, "thinking", "") or ""
+
+            # Web-search citation blocks and tool_use blocks are captured
+            # in raw_data but not parsed further for sync calls, which are
+            # only used for lightweight internal tasks (e.g. memory update).
+            else:
+                raw_data.append({
+                    "type": f"content_block_{block_type}",
+                    "event": str(block),
+                })
+
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": f"Response parsing failed: {type(e).__name__}: {e}",
+            "data_response": data_response,
+            "thinking_content": thinking_content,
+            "raw_data": raw_data,
+        }
+
+    status = "ok" if data_response.strip() else "no_response"
+    return {
+        "status": status,
+        "data_response": data_response,
+        "thinking_content": thinking_content,
+        "raw_data": raw_data,
+        "error": None,
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Streaming handler
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _handle_streaming(
+    client: Anthropic,
+    api_kwargs: Dict[str, Any],
+    recv_path: Optional[str],
+) -> Dict[str, Any]:
+    """Handle a streaming API call with real-time chunk output."""
+    try:
+        response_iter = client.messages.create(**api_kwargs, stream=True)
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": f"Failed to start request: {type(e).__name__}: {e}",
+            "data_response": "",
+            "thinking_content": "",
+            "raw_data": [],
+        }
+
+    data_response = ""
+    thinking_content = ""
+    raw_data: List[Dict[str, Any]] = []
+
     try:
         for event in response_iter:
             # Capture raw event (best-effort)
