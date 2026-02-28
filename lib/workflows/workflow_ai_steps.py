@@ -11,6 +11,12 @@ Public API:
         Supports ``-continue`` to resume from the last saved checkpoint
         after a crash or connection loss.
 
+        Short-term memory is maintained throughout the workflow lifecycle,
+        giving Claude context about the overall mission, progress, and
+        current step when executing individual steps.  It is cleared only
+        when all steps have been processed (completed or skipped), and
+        persists on disk across ``-continue`` resumes and user quits.
+
 Commit message format:
     feature_title: category: ai-step X/Y - step_title
     e.g. User Preferences: database: ai-step 1/5 - Add preferences table
@@ -29,6 +35,7 @@ from lib.files import add_source
 from lib.tree import get_directory_tree
 from lib.git import has_uncommitted_changes, commit_changes, revert_to_last_commit, is_git_available
 from lib.export import export_md_file, log_prompt
+from lib.memory import save_short_term_memory, clear_short_term_memory
 from lib.utils import warn, COLOR_GREEN, COLOR_YELLOW, COLOR_CYAN, COLOR_RESET
 
 from lib.tools.tool_source_generate import generate_source
@@ -87,6 +94,83 @@ def _load_workflow_state(output_dir: str) -> Optional[Dict[str, Any]]:
     except Exception as e:
         warn(f"[state] Failed to load workflow state: {e}")
         return None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Short-term memory helper
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _update_short_term(
+    memory_dir: str,
+    minimal_prompt: str,
+    expanded_summary: str,
+    steps: Optional[List[Dict[str, Any]]],
+    feature_title: str,
+    completed: Set[int],
+    skipped: Set[int],
+    current_step: Optional[Dict[str, Any]],
+    phase_status: Dict[str, str],
+) -> None:
+    """Build and save short-term memory reflecting current workflow state.
+
+    This provides Claude with context about the overall ai-steps mission
+    when executing individual steps, so it understands the bigger picture.
+
+    The content is structured as a lightweight Markdown document with
+    sections for goal, phase progress, step overview (with completion
+    markers), current step detail, and a condensed expansion summary.
+
+    This function is intentionally fire-and-forget — a failure to update
+    short-term memory must never block or crash the workflow.
+    """
+    lines = ["# Current Workflow\n"]
+
+    # Goal section — what we're trying to accomplish
+    lines.append("## Goal")
+    lines.append(minimal_prompt.strip()[:300])  # Truncate very long prompts
+    lines.append("")
+
+    # Feature context
+    lines.append(f"## Feature: {feature_title}")
+    lines.append("")
+
+    # Phase progress
+    lines.append("## Phase Progress")
+    for phase, status in phase_status.items():
+        lines.append(f"- {phase}: {status}")
+    lines.append("")
+
+    # Steps overview (if available)
+    if steps:
+        lines.append("## Steps Overview")
+        for s in steps:
+            num = s["number"]
+            title = s["title"]
+            cat = s.get("category", "general")
+            if num in completed:
+                marker = "✓"
+            elif num in skipped:
+                marker = "⊘ skipped"
+            elif current_step and num == current_step["number"]:
+                marker = "← current"
+            else:
+                marker = ""
+            lines.append(f"  {num}. [{cat}] {title} {marker}")
+        lines.append("")
+
+    # Current step detail
+    if current_step:
+        lines.append(f"## Current Step: {current_step['number']}. {current_step['title']}")
+        lines.append(f"Category: {current_step.get('category', 'general')}")
+        lines.append("")
+
+    # Key context from expansion (condensed)
+    lines.append("## Expanded Specification Summary")
+    lines.append(expanded_summary.strip()[:500])
+    lines.append("")
+
+    content = "\n".join(lines)
+    save_short_term_memory(memory_dir, content)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -191,6 +275,13 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
     This workflow requires git to be available.  Each accepted step is
     committed with a structured message:
     ``feature_title: category: ai-step X/Y - step_title``
+
+    Short-term memory is updated at each phase transition and before
+    each step execution, providing Claude with awareness of the overall
+    mission, progress, and current step when executing individual steps.
+    Short-term memory is only cleared when all steps have been processed
+    (completed or skipped), and persists across ``-continue`` resumes
+    and user quits so the next session can pick up context.
 
     When ``args.continue_steps`` is True, the workflow resumes from the
     last saved checkpoint — skipping already-completed phases and steps.
@@ -350,6 +441,21 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
             "skipped_steps": [],
         }, steps_output_dir)
         print("[Phase 1] ✓ State saved (Phase 1 complete)")
+
+        # Initialize short-term memory with workflow goal and expansion summary.
+        # This gives Claude early context about the mission even before steps
+        # are decomposed, useful if Phase 2 itself needs project awareness.
+        _update_short_term(
+            cfg.memory_dir,
+            minimal_prompt=cfg.prompt,
+            expanded_summary=expanded_prompt_text[:500],
+            steps=None,
+            feature_title=feature_title,
+            completed=set(),
+            skipped=set(),
+            current_step=None,
+            phase_status={"expand": "Complete", "stepize": "Pending", "execute": "Pending"},
+        )
     else:
         print(f"\n{COLOR_CYAN}{'─' * 60}")
         print(f"  PHASE 1: PROMPT EXPANSION — SKIPPED (loaded from state)")
@@ -425,6 +531,20 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
             "skipped_steps": sorted(skipped_steps_set),
         }, steps_output_dir)
         print("[Phase 2] ✓ State saved (Phase 2 complete)")
+
+        # Update short-term memory with the full step list so Claude has a
+        # roadmap of the entire implementation plan before execution begins.
+        _update_short_term(
+            cfg.memory_dir,
+            minimal_prompt=cfg.prompt,
+            expanded_summary=expanded_prompt_text[:500],
+            steps=steps,
+            feature_title=feature_title,
+            completed=completed_steps_set,
+            skipped=skipped_steps_set,
+            current_step=None,
+            phase_status={"expand": "Complete", "stepize": "Complete", "execute": "Starting"},
+        )
     else:
         print(f"\n{COLOR_CYAN}{'─' * 60}")
         print(f"  PHASE 2: STEP DECOMPOSITION — SKIPPED (loaded from state)")
@@ -501,6 +621,22 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
                 print(f"{prefix} Source list: {len(exec_source_paths)} entries")
 
             # ── 3.2 Execute the step ────────────────────────────────────────
+            # Update short-term memory with current step context so Claude
+            # knows which step it is executing, what has been completed, and
+            # the overall mission — providing big-picture awareness for each
+            # atomic step execution.
+            _update_short_term(
+                cfg.memory_dir,
+                minimal_prompt=cfg.prompt,
+                expanded_summary=expanded_prompt_text[:500],
+                steps=steps,
+                feature_title=feature_title,
+                completed=completed_steps_set,
+                skipped=skipped_steps_set,
+                current_step=step,
+                phase_status={"expand": "Complete", "stepize": "Complete", "execute": f"Step {step_number}/{total_steps}"},
+            )
+
             print(f"\n{prefix} Executing step...")
             exec_result = execute_prompt(
                 cfg=cfg,
@@ -509,6 +645,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
                 apply_to_disk=True,
                 output_dir=step_dir,
                 label=f"attempt-{retry_count}-",
+                include_short_term_memory=True,  # Include workflow context in prompt
             )
 
             if exec_result["status"] != "ok":
@@ -668,6 +805,8 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
                 break
 
             elif user_result["action"] == "quit":
+                # User quit — preserve short-term memory on disk so
+                # -continue can resume with full workflow context intact.
                 print(f"{prefix} Reverting changes and quitting...")
                 revert_to_last_commit()
                 # Save state so -continue can resume later
@@ -688,7 +827,9 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
     _print_summary(completed_count, skipped_count, total_steps)
     log_prompt(cfg.prompt, cfg.logs_dir)
 
-    # Clean up state file on successful completion of all steps
+    # Clean up state file and short-term memory on successful completion of
+    # all steps.  Short-term memory is only cleared here — NOT on user quit
+    # — so that -continue can resume with full workflow context intact.
     if completed_count + skipped_count >= total_steps:
         state_path = os.path.join(steps_output_dir, _STATE_FILENAME)
         if os.path.isfile(state_path):
@@ -697,3 +838,6 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
                 os.remove(state_path)
             except Exception:
                 pass  # non-critical
+
+        clear_short_term_memory(cfg.memory_dir)
+        print("[ai-steps] Short-term memory cleared.")
