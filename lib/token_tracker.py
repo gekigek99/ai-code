@@ -92,7 +92,7 @@ _BAR_WIDTH = 25       # Number of characters for the bar
 _BAR_FILLED = "█"
 _BAR_EMPTY = " "
 _LABEL_WIDTH = 20     # Padding for component labels (widened for longer names)
-_TOKEN_WIDTH = 10     # Padding for token count column
+_TOKEN_WIDTH = 12     # Padding for token count column
 
 
 def display_token_breakdown(breakdown: TokenBreakdown) -> None:
