@@ -57,40 +57,24 @@ class TokenBreakdown:
 
 # ── Bar chart configuration ──────────────────────────────────────────────────
 _BAR_WIDTH = 25       # Number of characters for the bar
-_BAR_FILLED = "█"
-_BAR_EMPTY = "░"
+_BAR_FILLED = "■"
+_BAR_EMPTY = " "
 _LABEL_WIDTH = 18     # Padding for component labels
 _TOKEN_WIDTH = 10     # Padding for token count column
 
 
 def display_token_breakdown(breakdown: TokenBreakdown) -> None:
-    """Print a coloured ASCII bar chart of token usage to stdout.
-
-    Example output:
-    ┌──────────────────────────────────────────────────────────────────┐
-    │  TOKEN USAGE BREAKDOWN                                          │
-    │  Total Estimated: ~12,450 tokens                                │
-    │                                                                  │
-    │  System            ~2,000 tk  ████████░░░░░░░░░░░░░░░░░  16.1%  │
-    │  Long-term Memory  ~1,200 tk  █████░░░░░░░░░░░░░░░░░░░░   9.6%  │
-    │  Short-term Memory   ~300 tk  █░░░░░░░░░░░░░░░░░░░░░░░░   2.4%  │
-    │  Git History         ~800 tk  ███░░░░░░░░░░░░░░░░░░░░░░   6.4%  │
-    │  File Data         ~7,500 tk  ██████████████████████████  60.2%  │
-    │  Prompt              ~650 tk  ███░░░░░░░░░░░░░░░░░░░░░░   5.2%  │
-    └──────────────────────────────────────────────────────────────────┘
-    """
+    """Print a coloured ASCII bar chart of token usage to stdout."""
     total = breakdown.total
     if total == 0:
         print(f"\n{COLOR_CYAN}[Token Breakdown] No token data available.{COLOR_RESET}")
         return
 
     components = breakdown._components()
+    total_token_str = f"~{total:,} tk"
 
-    # Build the chart lines
-    print(f"\n{COLOR_CYAN}┌{'─' * 66}┐")
-    print(f"│  TOKEN USAGE BREAKDOWN{' ' * 44}│")
-    print(f"│  Total Estimated: ~{total:,} tokens{' ' * (37 - len(f'{total:,}'))}│")
-    print(f"│{' ' * 66}│")
+    print(f"\n{COLOR_CYAN}TOKEN USAGE BREAKDOWN{COLOR_RESET}")
+    print(f"{COLOR_CYAN}{"Total".ljust(_LABEL_WIDTH+2)} {total_token_str.rjust(_TOKEN_WIDTH)} {COLOR_RESET}")
 
     for label, tokens in components:
         # Skip components with zero tokens to reduce noise
@@ -111,9 +95,4 @@ def display_token_breakdown(breakdown: TokenBreakdown) -> None:
         padded_tokens = token_str.rjust(_TOKEN_WIDTH)
         pct_str = f"{pct:5.1f}%"
 
-        line = f"  {padded_label}{padded_tokens}  {bar}  {pct_str}"
-        # Pad to fixed width for the box border
-        line_padded = line.ljust(64)
-        print(f"│{COLOR_GREEN}{line_padded}{COLOR_CYAN}  │")
-
-    print(f"└{'─' * 66}┘{COLOR_RESET}")
+        print(f"{COLOR_CYAN} └ {padded_label}{padded_tokens}  {bar}  {pct_str}{COLOR_RESET}")
