@@ -69,7 +69,7 @@ A modular Python tool to run Anthropic Claude on your codebase, generate or upda
 - Skips binary files automatically
 - Shows a directory tree of your project with token estimates
 - Streams prompts to Claude and captures responses in real time
-- Writes, updates, moves, and deletes files based on `+++++` markers
+- Writes, updates, moves, and deletes files based on `{'+'*5}` markers
 - Validates response structure before applying changes
 - PDF text extraction support
 - Image attachment support (JPEG, PNG, GIF, WebP)

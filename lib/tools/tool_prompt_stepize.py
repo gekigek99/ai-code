@@ -35,7 +35,7 @@ def stepize_prompt(
 
     Claude receives the source file content, long-term project memory, and a
     meta-prompt instructing it to produce a YAML step list in a
-    ``+++++ ./steps.yaml [EDIT]`` block.
+    ``{'+'*5} ./steps.yaml [EDIT]`` block.
 
     Parameters
     ----------

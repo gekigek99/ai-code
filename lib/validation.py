@@ -16,9 +16,9 @@ from lib.utils import COLOR_GREEN, COLOR_YELLOW, COLOR_RESET, warn
 # ──────────────────────────────────────────────────────────────────────────────
 # Block-detection regex
 # ──────────────────────────────────────────────────────────────────────────────
-# Header line:  +++++ <source_path> [optional TAG] [optional MOVE dest]<newline>
+# Header line:  {'+'*5} <source_path> [optional TAG] [optional MOVE dest]<newline>
 # Body:         anything (non-greedy)
-# Closing line: +++++ (exactly, at start of line, nothing else)
+# Closing line: {'+'*5} (exactly, at start of line, nothing else)
 #
 # Named groups:
 #   source  – source file path
@@ -29,13 +29,13 @@ from lib.utils import COLOR_GREEN, COLOR_YELLOW, COLOR_RESET, warn
 # ──────────────────────────────────────────────────────────────────────────────
 block_pattern = re.compile(
     r'^'
-    r'\+{5}\s+'                                     # opening +++++ + whitespace
+    r'\+{5}\s+'                                     # opening {'+'*5} + whitespace
     r'(?P<source>.+?)'                              # source path (non-greedy)
     r'(?:\s*\[(?P<tag>EDIT|DELETE)\])?'             # optional [EDIT] or [DELETE]
     r'(?:\s*\[(?P<move>MOVE)\]\s+(?P<dest>.+?))?'  # optional [MOVE] + dest path
     r'\s*\n'                                        # end of header
     r'(?P<content>.*?)'                             # content (non-greedy, DOTALL)
-    r'^\+{5}$',                                     # closing +++++ on its own line
+    r'^\+{5}$',                                     # closing {'+'*5} on its own line
     re.MULTILINE | re.DOTALL,
 )
 
@@ -47,7 +47,7 @@ def validate_claude_response(text_data: str) -> bool:
     """Validate structural integrity of Claude's response.
 
     Checks performed:
-      1. Lines beginning with ``+++++`` must come in an even count (2 per block).
+      1. Lines beginning with ``{'+'*5}`` must come in an even count (2 per block).
       2. Data outside matched blocks is less than 3 % of total response length.
 
     Returns True if all checks pass, False otherwise.  Warnings are printed
@@ -65,12 +65,12 @@ def validate_claude_response(text_data: str) -> bool:
     marker_count = len(marker_lines)
 
     if marker_count == 0:
-        msg = "VALIDATION WARN: No +++++ marker lines found in response – no file blocks detected."
+        msg = f"VALIDATION WARN: No {'+'*5} marker lines found in response – no file blocks detected."
         warnings.append(msg)
         passed = False
     elif marker_count % 2 != 0:
         msg = (
-            f"VALIDATION FAIL: +++++ marker line count is ODD ({marker_count}). "
+            f"VALIDATION FAIL: {'+'*5} marker line count is ODD ({marker_count}). "
             f"Expected an even number (exactly 2 per block). "
             f"This means at least one block is missing its header or closing marker."
         )
@@ -78,7 +78,7 @@ def validate_claude_response(text_data: str) -> bool:
         passed = False
     else:
         block_count_est = marker_count // 2
-        msg = f"VALIDATION OK: +++++ marker lines = {marker_count} (= {block_count_est} block(s)), count is even."
+        msg = f"VALIDATION OK: {'+'*5} marker lines = {marker_count} (= {block_count_est} block(s)), count is even."
         print(f"{COLOR_GREEN}{msg}{COLOR_RESET}")
 
     # ── Check 2: outside-block percentage < 3 % ─────────────────────────────
@@ -116,7 +116,7 @@ def validate_claude_response(text_data: str) -> bool:
             combined_outside = combined_outside[:500] + "... [truncated]"
 
         msg = (
-            f"VALIDATION FAIL: {outside_pct:.2f}% of response data is outside +++++ blocks "
+            f"VALIDATION FAIL: {outside_pct:.2f}% of response data is outside {'+'*5} blocks "
             f"(threshold: {OUTSIDE_THRESHOLD_PCT:.1f}%). "
             f"This likely means Claude emitted prose, explanations, or malformed blocks.\n"
             f"Outside content preview:\n{combined_outside}"

@@ -34,7 +34,7 @@ def expand_prompt(
     Claude receives the source file content, long-term project memory, and a
     meta-prompt instructing it to produce a comprehensive specification WITHOUT
     implementing any code.  The expanded prompt is returned in a
-    ``+++++ ./expanded-prompt.md [EDIT]`` block.
+    ``{'+'*5} ./expanded-prompt.md [EDIT]`` block.
 
     Parameters
     ----------

@@ -3,7 +3,7 @@ lib.apply — apply file operations (write, move, delete) from parsed response b
 
 Public API:
     claude_data_to_file(text_data, abs_file_paths=None) -> None
-        Parse *text_data* for +++++ blocks and apply each operation to disk.
+        Parse *text_data* for {'+'*5} blocks and apply each operation to disk.
 """
 
 import os
@@ -23,7 +23,7 @@ def claude_data_to_file(
     Parameters
     ----------
     text_data : str
-        Raw response text containing ``+++++`` delimited blocks.
+        Raw response text containing ``{'+'*5}`` delimited blocks.
     abs_file_paths : set[str], optional
         Normalised absolute paths of originally discovered source files.
         Used to tag operations as "in original source" or "new/external" in

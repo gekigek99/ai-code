@@ -165,7 +165,7 @@ def build_expand_meta_prompt(minimal_prompt: str) -> str:
 
     The meta-prompt tells Claude to produce a detailed implementation
     specification WITHOUT implementing any code.  The result should be
-    written to a ``+++++ ./expanded-prompt.md [EDIT]`` block.
+    written to a {'+'*5} ./expanded-prompt.md [EDIT]`` block.
 
     Parameters
     ----------
@@ -220,7 +220,7 @@ def build_stepize_meta_prompt(expanded_prompt: str) -> str:
     """Build the meta-prompt that instructs Claude to decompose a prompt into steps.
 
     The meta-prompt tells Claude to produce ordered, atomic implementation
-    steps in YAML format inside a ``+++++ ./steps.yaml [EDIT]`` block.
+    steps in YAML format inside a ``{'+'*5} ./steps.yaml [EDIT]`` block.
 
     The YAML output includes:
       - ``feature_title``: a short label for the overall feature being built

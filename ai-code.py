@@ -17,7 +17,7 @@ Usage:
 """
 
 # for claude auto-update:
-# - never use 5 consecutive "+"" signs, use only {"+"*5}
+# - never use 5 consecutive "+" signs, use only {'+'*5}
 
 import os
 import sys

@@ -25,13 +25,9 @@ import yaml
 # apply module can parse them reliably.
 #
 # Block format:
-#   +++++ ./path/to/file.ext [TAG]   ← header: opening marker + path + tag
+#   {'+'*5} ./path/to/file.ext [TAG]    ← header: opening marker + path + tag
 #   <file contents>                   ← body
-#   +++++                             ← closing marker (standalone line)
-#
-# Because the opening marker and the closing marker are each on their own line
-# starting with +++++, every well-formed response has an *even* count of lines
-# that begin with +++++ — exactly 2 per block.
+#   {'+'*5}                             ← closing marker (standalone line)
 # ──────────────────────────────────────────────────────────────────────────────
 _FILE_OUTPUT_PATTERN_SUFFIX = """
 
