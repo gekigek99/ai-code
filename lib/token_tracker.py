@@ -23,13 +23,25 @@ class TokenBreakdown:
 
     Each field corresponds to a distinct section of the assembled prompt.
     All values are approximate (~chars/4).
+
+    Components map to what the LLM actually receives:
+      - system:              The system prompt (from yaml ``system`` field)
+      - long_term_memory:    Long-term project memory (.ai-code/memory/long-term.md)
+      - short_term_memory:   Short-term workflow memory (ai-steps context)
+      - git_history:         Recent git commit history
+      - source_files:        Content of all source files shared with the LLM
+      - file_tree:           The project directory tree listing
+      - user_prompt:         The user's prompt text (from yaml ``prompt`` field)
+      - memory_instructions: Inline memory update instructions appended to prompt
     """
-    system: int = 0              # System prompt tokens
-    long_term_memory: int = 0    # Long-term project memory tokens
-    short_term_memory: int = 0   # Short-term workflow memory tokens
-    git_history: int = 0         # Git commit history tokens
-    file_data: int = 0           # Source file content tokens
-    prompt: int = 0              # User prompt + memory update instructions tokens
+    system: int = 0               # System prompt tokens
+    long_term_memory: int = 0     # Long-term project memory tokens
+    short_term_memory: int = 0    # Short-term workflow memory tokens
+    git_history: int = 0          # Git commit history tokens
+    source_files: int = 0         # Source file content tokens
+    file_tree: int = 0            # Directory tree listing tokens
+    user_prompt: int = 0          # User prompt from yaml tokens
+    memory_instructions: int = 0  # Inline memory update instructions tokens
 
     @property
     def total(self) -> int:
@@ -39,19 +51,28 @@ class TokenBreakdown:
             + self.long_term_memory
             + self.short_term_memory
             + self.git_history
-            + self.file_data
-            + self.prompt
+            + self.source_files
+            + self.file_tree
+            + self.user_prompt
+            + self.memory_instructions
         )
 
     def _components(self) -> List[Tuple[str, int]]:
-        """Return ordered list of (label, token_count) pairs for display."""
+        """Return ordered list of (label, token_count) pairs for display.
+
+        Ordered from context framing (system, memory) through source data
+        to the user's actual request, matching the logical flow of what
+        the LLM processes.
+        """
         return [
             ("System", self.system),
             ("Long-term Memory", self.long_term_memory),
             ("Short-term Memory", self.short_term_memory),
             ("Git History", self.git_history),
-            ("File Data", self.file_data),
-            ("Prompt", self.prompt),
+            ("Source Files", self.source_files),
+            ("File Tree", self.file_tree),
+            ("User Prompt", self.user_prompt),
+            ("Memory Instructions", self.memory_instructions),
         ]
 
 
@@ -59,12 +80,17 @@ class TokenBreakdown:
 _BAR_WIDTH = 25       # Number of characters for the bar
 _BAR_FILLED = "█"
 _BAR_EMPTY = " "
-_LABEL_WIDTH = 18     # Padding for component labels
+_LABEL_WIDTH = 20     # Padding for component labels (widened for longer names)
 _TOKEN_WIDTH = 10     # Padding for token count column
 
 
 def display_token_breakdown(breakdown: TokenBreakdown) -> None:
-    """Print a coloured ASCII bar chart of token usage to stdout."""
+    """Print a coloured ASCII bar chart of token usage to stdout.
+
+    Zero-token components are omitted to reduce noise.  The total line
+    appears first as a summary, followed by each non-zero component with
+    a proportional bar and percentage.
+    """
     total = breakdown.total
     if total == 0:
         print(f"\n{COLOR_CYAN}[Token Breakdown] No token data available.{COLOR_RESET}")
@@ -74,7 +100,7 @@ def display_token_breakdown(breakdown: TokenBreakdown) -> None:
     total_token_str = f"~{total:,} tk"
 
     print(f"\n{COLOR_CYAN}TOKEN USAGE BREAKDOWN{COLOR_RESET}")
-    print(f"{COLOR_CYAN}{"Total".ljust(_LABEL_WIDTH+2)} {total_token_str.rjust(_TOKEN_WIDTH)} {COLOR_RESET}")
+    print(f"{COLOR_CYAN}{"Total".ljust(_LABEL_WIDTH + 2)} {total_token_str.rjust(_TOKEN_WIDTH)} {COLOR_RESET}")
 
     for label, tokens in components:
         # Skip components with zero tokens to reduce noise

@@ -162,8 +162,9 @@ def execute_prompt(
     if memory_instructions:
         print(f"[tool_prompt_execute] Inline memory update instructions appended ({len(memory_instructions)} chars)")
 
-    # Track prompt tokens (user prompt + memory update instructions)
-    breakdown.prompt = len(full_prompt) // 4
+    # Track token counts separately: user prompt vs memory update instructions
+    breakdown.user_prompt = len(prompt) // 4
+    breakdown.memory_instructions = len(memory_instructions) // 4 if memory_instructions else 0
 
     # ── 4. Build message content ─────────────────────────────────────────────
     # Pass the memory block so it is prepended as the first content item,
@@ -172,12 +173,12 @@ def execute_prompt(
         files_to_ai, full_prompt, ai_file_listing, memory_block=memory_block,
     )
 
-    # Track file data tokens — sum of all shared file token estimates
-    breakdown.file_data = sum(
+    # Track source file tokens — sum of all shared file token estimates
+    breakdown.source_files = sum(
         f.ai_data_tokens for f in files_to_ai if f.ai_share
     )
-    # Add the directory tree listing tokens to file_data
-    breakdown.file_data += len(ai_file_listing) // 4
+    # Track directory tree listing tokens separately from source file content
+    breakdown.file_tree = len(ai_file_listing) // 4
 
     # ── Display token breakdown graph ────────────────────────────────────────
     display_token_breakdown(breakdown)
