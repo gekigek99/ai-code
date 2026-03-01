@@ -23,6 +23,7 @@ import yaml
 from lib.config import Config
 from lib.export import export_md_file
 from lib.memory import build_memory_block
+from lib.token_tracker import TokenBreakdown, display_token_breakdown
 from lib.prompt_builder import generate_prompt_for_gen_source
 from lib.providers.claude import prompt_claude
 from lib.validation import block_pattern, validate_claude_response
@@ -82,6 +83,10 @@ def generate_source(
 
     os.makedirs(output_dir, exist_ok=True)
 
+    # ── Token breakdown tracker ──────────────────────────────────────────────
+    breakdown = TokenBreakdown()
+    breakdown.system = len(cfg.system) // 4
+
     # ── Build memory context block ───────────────────────────────────────────
     # Assemble long-term memory, short-term memory (if requested), and git
     # history (commit messages, titles, per-file line diffs) into a single
@@ -90,15 +95,28 @@ def generate_source(
     # relevant for the given prompt.  Without this, Claude would rely solely
     # on the directory tree and prompt text, missing important context about
     # which files were recently modified or are architecturally significant.
-    memory_block = build_memory_block(
+    memory_result = build_memory_block(
         cfg, include_short_term=include_short_term_memory,
     )
+    memory_block = memory_result.text
+
+    # Transfer memory token counts to breakdown
+    breakdown.long_term_memory = memory_result.long_term_tokens
+    breakdown.short_term_memory = memory_result.short_term_tokens
+    breakdown.git_history = memory_result.git_history_tokens
+
     if memory_block:
         print(f"[tool_source_generate] Memory block: {len(memory_block)} chars "
-              f"(~{len(memory_block) // 4} tokens)")
+              f"(~{len(memory_block) // 4} tokens | "
+              f"LT={memory_result.long_term_tokens} ST={memory_result.short_term_tokens} "
+              f"Git={memory_result.git_history_tokens})")
 
     # ── Build the gen-source message ─────────────────────────────────────────
     message_content = generate_prompt_for_gen_source(prompt, example_source, tree_str)
+
+    # Track prompt tokens — the gen-source meta-prompt + user prompt + tree
+    prompt_tokens = sum(len(part.get("text", "")) for part in message_content) // 4
+    breakdown.prompt = prompt_tokens
 
     # Prepend memory block as the first content item so Claude sees project
     # context (architecture, recent commits, workflow state) before the
@@ -107,6 +125,12 @@ def generate_source(
     # build_message_content() in prompt_builder.py.
     if memory_block:
         message_content.insert(0, {"type": "text", "text": memory_block})
+
+    # gen-source has no file data (only tree + memory + prompt)
+    breakdown.file_data = 0
+
+    # ── Display token breakdown graph ────────────────────────────────────────
+    display_token_breakdown(breakdown)
 
     print("\n[tool_source_generate] Asking Claude for relevant source list...")
 

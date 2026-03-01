@@ -16,11 +16,14 @@ Public API:
         current step when executing individual steps.  It is cleared only
         when all steps have been processed (completed or skipped), and
         persists on disk across ``-continue`` resumes and user quits.
+        Short-term memory is stored inside the ai-code directory at
+        ``<script_dir>/memory/short-term.md``.
 
         Long-term memory is updated inline during each step execution —
-        Claude outputs an updated ``memory/long-term.md`` block alongside
+        Claude outputs an updated ``.ai-code/long-term.md`` block alongside
         code blocks, so the memory always reflects the current codebase
-        state without separate API calls.
+        state without separate API calls.  Long-term memory is stored at
+        ``<parent_of_script_dir>/.ai-code/long-term.md``.
 
         Memory context (long-term, short-term, git history) is also
         injected during source generation phases so Claude can make
@@ -110,7 +113,7 @@ def _load_workflow_state(output_dir: str) -> Optional[Dict[str, Any]]:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _update_short_term(
-    memory_dir: str,
+    memory_short_term_dir: str,
     minimal_prompt: str,
     expanded_summary: str,
     steps: Optional[List[Dict[str, Any]]],
@@ -128,6 +131,9 @@ def _update_short_term(
     The content is structured as a lightweight Markdown document with
     sections for goal, phase progress, step overview (with completion
     markers), current step detail, and a condensed expansion summary.
+
+    Short-term memory is saved to ``memory_short_term_dir`` which lives
+    inside the ai-code script directory (``<script_dir>/memory/``).
 
     This function is intentionally fire-and-forget — a failure to update
     short-term memory must never block or crash the workflow.
@@ -179,7 +185,7 @@ def _update_short_term(
     lines.append("")
 
     content = "\n".join(lines)
-    save_short_term_memory(memory_dir, content)
+    save_short_term_memory(memory_short_term_dir, content)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -290,14 +296,16 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
     mission, progress, and current step when executing individual steps.
     Short-term memory is only cleared when all steps have been processed
     (completed or skipped), and persists across ``-continue`` resumes
-    and user quits so the next session can pick up context.
+    and user quits so the next session can pick up context.  Short-term
+    memory is stored at ``<script_dir>/memory/short-term.md``.
 
     Long-term memory is updated inline during each step execution —
-    Claude outputs a ``memory/long-term.md`` block alongside code blocks.
+    Claude outputs a ``.ai-code/long-term.md`` block alongside code blocks.
     This is handled by ``execute_prompt`` via
     ``build_memory_update_instructions`` and
     ``extract_and_save_memory_from_response``, so the memory always
     reflects the current codebase state without separate API calls.
+    Long-term memory is stored at ``<parent_of_script_dir>/.ai-code/long-term.md``.
 
     Memory context (long-term, short-term, git history) is also injected
     into source generation calls so Claude has project awareness when
@@ -470,8 +478,9 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
         # Initialize short-term memory with workflow goal and expansion summary.
         # This gives Claude early context about the mission even before steps
         # are decomposed, useful if Phase 2 itself needs project awareness.
+        # Short-term memory is stored inside the ai-code script directory.
         _update_short_term(
-            cfg.memory_dir,
+            cfg.memory_short_term_dir,
             minimal_prompt=cfg.prompt,
             expanded_summary=expanded_prompt_text[:500],
             steps=None,
@@ -565,7 +574,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
         # Update short-term memory with the full step list so Claude has a
         # roadmap of the entire implementation plan before execution begins.
         _update_short_term(
-            cfg.memory_dir,
+            cfg.memory_short_term_dir,
             minimal_prompt=cfg.prompt,
             expanded_summary=expanded_prompt_text[:500],
             steps=steps,
@@ -661,7 +670,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
             # the overall mission — providing big-picture awareness for each
             # atomic step execution.
             _update_short_term(
-                cfg.memory_dir,
+                cfg.memory_short_term_dir,
                 minimal_prompt=cfg.prompt,
                 expanded_summary=expanded_prompt_text[:500],
                 steps=steps,
@@ -877,5 +886,5 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
             except Exception:
                 pass  # non-critical
 
-        clear_short_term_memory(cfg.memory_dir)
+        clear_short_term_memory(cfg.memory_short_term_dir)
         print("[ai-steps] Short-term memory cleared.")

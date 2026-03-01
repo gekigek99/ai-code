@@ -15,6 +15,7 @@ import yaml
 from lib.config import Config
 from lib.files import FileData, add_source
 from lib.memory import build_memory_block
+from lib.token_tracker import TokenBreakdown, display_token_breakdown
 from lib.tree import get_directory_tree
 from lib.prompt_builder import build_message_content, build_stepize_meta_prompt
 from lib.providers.claude import prompt_claude
@@ -78,6 +79,10 @@ def stepize_prompt(
 
     os.makedirs(output_dir, exist_ok=True)
 
+    # ── Token breakdown tracker ──────────────────────────────────────────────
+    breakdown = TokenBreakdown()
+    breakdown.system = len(cfg.system) // 4
+
     # ── 1. Discover and read source files ────────────────────────────────────
     files_to_ai: List[FileData] = []
     files_to_ai, _ = add_source(
@@ -96,10 +101,19 @@ def stepize_prompt(
     # produce more accurate step decompositions and source-file selections.
     # Memory updates are NOT triggered here — only execute_prompt() may update
     # memory after actual code changes are applied to disk.
-    memory_block = build_memory_block(cfg, include_short_term=False)
+    memory_result = build_memory_block(cfg, include_short_term=False)
+    memory_block = memory_result.text
+
+    # Transfer memory token counts to breakdown
+    breakdown.long_term_memory = memory_result.long_term_tokens
+    breakdown.short_term_memory = memory_result.short_term_tokens
+    breakdown.git_history = memory_result.git_history_tokens
 
     # ── 3. Build the stepize meta-prompt ─────────────────────────────────────
     meta_prompt = build_stepize_meta_prompt(expanded_prompt)
+
+    # Track prompt tokens
+    breakdown.prompt = len(meta_prompt) // 4
 
     # ── 4. Build message content ─────────────────────────────────────────────
     # memory_block is prepended as the first content item so Claude sees
@@ -108,8 +122,12 @@ def stepize_prompt(
         files_to_ai, meta_prompt, ai_file_listing, memory_block=memory_block,
     )
 
-    estimated_tokens = (len(str(message_content)) + len(str(cfg.system))) // 4
-    print(f"\n[tool_prompt_stepize] Input tokens [ESTIMATED]: {estimated_tokens}")
+    # Track file data tokens
+    breakdown.file_data = sum(f.ai_data_tokens for f in files_to_ai if f.ai_share)
+    breakdown.file_data += len(ai_file_listing) // 4
+
+    # ── Display token breakdown graph ────────────────────────────────────────
+    display_token_breakdown(breakdown)
 
     # ── 5. Call Claude ───────────────────────────────────────────────────────
     print("[tool_prompt_stepize] Asking Claude to decompose prompt into steps...")

@@ -9,7 +9,7 @@ Public API:
         optionally apply → export artifacts.
 
 Memory updates are performed **inline**: the prompt includes instructions
-for Claude to output a ``memory/long-term.md`` file block alongside
+for Claude to output a ``.ai-code/long-term.md`` file block alongside
 regular code blocks.  After receiving the response, the memory block is
 extracted, saved to disk, and stripped from the response before file
 application.  This eliminates separate API calls for memory updates.
@@ -28,6 +28,7 @@ from lib.memory import (
     build_memory_update_instructions,
     extract_and_save_memory_from_response,
 )
+from lib.token_tracker import TokenBreakdown, display_token_breakdown
 from lib.providers.claude import prompt_claude
 from lib.validation import validate_claude_response
 from lib.apply import claude_data_to_file
@@ -57,7 +58,7 @@ def execute_prompt(
 
     When ``cfg.memory_auto_update`` is True, inline memory update
     instructions are appended to the prompt so Claude outputs an updated
-    ``memory/long-term.md`` block alongside code blocks.  After response,
+    ``.ai-code/long-term.md`` block alongside code blocks.  After response,
     the memory block is extracted, saved, and stripped before applying
     code changes to disk.  No separate API calls are made for memory.
 
@@ -113,6 +114,10 @@ def execute_prompt(
 
     os.makedirs(output_dir, exist_ok=True)
 
+    # ── Token breakdown tracker ──────────────────────────────────────────────
+    breakdown = TokenBreakdown()
+    breakdown.system = len(cfg.system) // 4
+
     # ── 1. Prepare files_to_ai with optional images ─────────────────────────
     files_to_ai: List[FileData] = []
     if image_paths:
@@ -132,12 +137,22 @@ def execute_prompt(
     # Assemble long-term memory, short-term memory (if requested), and git
     # history into a single block for prompt injection.  This gives Claude
     # project context before it sees any source files or the user prompt.
-    memory_block = build_memory_block(cfg, include_short_term=include_short_term_memory)
+    memory_result = build_memory_block(cfg, include_short_term=include_short_term_memory)
+    memory_block = memory_result.text
+
+    # Transfer memory token counts to the breakdown tracker
+    breakdown.long_term_memory = memory_result.long_term_tokens
+    breakdown.short_term_memory = memory_result.short_term_tokens
+    breakdown.git_history = memory_result.git_history_tokens
+
     if memory_block:
-        print(f"[tool_prompt_execute] Memory block: {len(memory_block)} chars (~{len(memory_block) // 4} tokens)")
+        print(f"[tool_prompt_execute] Memory block: {len(memory_block)} chars "
+              f"(~{len(memory_block) // 4} tokens | "
+              f"LT={memory_result.long_term_tokens} ST={memory_result.short_term_tokens} "
+              f"Git={memory_result.git_history_tokens})")
 
     # ── 3c. Append inline memory update instructions to prompt ───────────────
-    # When enabled, this tells Claude to output an updated memory/long-term.md
+    # When enabled, this tells Claude to output an updated .ai-code/long-term.md
     # block alongside its regular file output.  Claude already has the existing
     # memory from the [MEMORY START] context block and all source files in the
     # prompt, so it can produce an accurate update in the same API call —
@@ -147,6 +162,9 @@ def execute_prompt(
     if memory_instructions:
         print(f"[tool_prompt_execute] Inline memory update instructions appended ({len(memory_instructions)} chars)")
 
+    # Track prompt tokens (user prompt + memory update instructions)
+    breakdown.prompt = len(full_prompt) // 4
+
     # ── 4. Build message content ─────────────────────────────────────────────
     # Pass the memory block so it is prepended as the first content item,
     # establishing project context before source files and the user prompt.
@@ -154,9 +172,15 @@ def execute_prompt(
         files_to_ai, full_prompt, ai_file_listing, memory_block=memory_block,
     )
 
-    # Approximate token estimate
-    estimated_tokens = (len(str(message_content)) + len(str(cfg.system))) // 4
-    print(f"\nInput tokens [ESTIMATED]: {estimated_tokens}")
+    # Track file data tokens — sum of all shared file token estimates
+    breakdown.file_data = sum(
+        f.ai_data_tokens for f in files_to_ai if f.ai_share
+    )
+    # Add the directory tree listing tokens to file_data
+    breakdown.file_data += len(ai_file_listing) // 4
+
+    # ── Display token breakdown graph ────────────────────────────────────────
+    display_token_breakdown(breakdown)
 
     # ── 5. Export assembled prompt for record-keeping ────────────────────────
     # Include the memory block and memory instructions in the exported prompt
@@ -245,10 +269,10 @@ def execute_prompt(
         print(f"[Saved {len(result['raw_data'])} raw events to file]")
 
     # ── 8. Extract and save memory from response ─────────────────────────────
-    # Parse the memory/long-term.md block from the response, save it to
-    # cfg.memory_dir, and strip it from the response.  This prevents the
-    # apply module from trying to create it as a project file (memory/ is
-    # in exclude_patterns and lives in the script dir, not the project root).
+    # Parse the .ai-code/long-term.md block from the response, save it to
+    # cfg.memory_long_term_dir, and strip it from the response.  This prevents
+    # the apply module from trying to create it as a project file (.ai-code/
+    # is in exclude_patterns and lives in the project root, not the cwd).
     data_response = extract_and_save_memory_from_response(cfg, data_response)
 
     # ── 9. Apply to disk ─────────────────────────────────────────────────────

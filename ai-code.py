@@ -32,6 +32,8 @@ from lib.export import export_md_file, log_prompt
 from lib.validation import validate_claude_response
 from lib.apply import claude_data_to_file
 from lib.prompt_builder import build_message_content
+from lib.token_tracker import TokenBreakdown, display_token_breakdown
+from lib.memory import build_memory_block
 from lib.utils import warn
 
 # Workflow imports — each encapsulates a full CLI workflow
@@ -126,12 +128,24 @@ def main() -> None:
         cfg.tree_dirs, cfg.exclude_patterns, files_to_ai,
     )
 
+    # Build memory block for dry run token estimation
+    memory_result = build_memory_block(cfg, include_short_term=False)
+
     message_content, data_files = build_message_content(
-        files_to_ai, cfg.prompt, ai_file_listing,
+        files_to_ai, cfg.prompt, ai_file_listing, memory_block=memory_result.text,
     )
 
-    # Approximate token estimate
-    print(f"Input tokens [ESTIMATED]: {(len(str(message_content)) + len(str(cfg.system))) // 4}")
+    # ── Token breakdown for dry run ──────────────────────────────────────────
+    breakdown = TokenBreakdown()
+    breakdown.system = len(cfg.system) // 4
+    breakdown.long_term_memory = memory_result.long_term_tokens
+    breakdown.short_term_memory = memory_result.short_term_tokens
+    breakdown.git_history = memory_result.git_history_tokens
+    breakdown.file_data = sum(f.ai_data_tokens for f in files_to_ai if f.ai_share)
+    breakdown.file_data += len(ai_file_listing) // 4
+    breakdown.prompt = len(cfg.prompt) // 4
+
+    display_token_breakdown(breakdown)
 
     # Export assembled prompt for record-keeping
     export_md_file(

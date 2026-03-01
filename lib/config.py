@@ -87,14 +87,19 @@ class Config:
 
     # ── Memory ───────────────────────────────────────────────────────────────
     memory_enabled: bool              # Master toggle for entire memory system
-    memory_long_term_enabled: bool    # Toggle long-term project memory (memory/long-term.md)
-    memory_short_term_enabled: bool   # Toggle short-term ai-steps memory (memory/short-term.md)
+    memory_long_term_enabled: bool    # Toggle long-term project memory
+    memory_short_term_enabled: bool   # Toggle short-term ai-steps memory
     memory_git_history_enabled: bool  # Toggle git history context (last N commits)
     memory_git_history_commits: int   # Number of recent commits to include
     memory_long_term_max_tokens: int  # Soft cap: triggers compaction when exceeded
     memory_short_term_max_tokens: int # Soft cap for short-term memory
     memory_auto_update: bool          # Auto-update project memory after each execution
-    memory_dir: str                   # <script_dir>/memory/
+    # Long-term memory lives in the *parent* project at .ai-code/ so it is
+    # tracked in the master project's git history, not the ai-code submodule.
+    memory_long_term_dir: str         # <parent_of_script_dir>/.ai-code/
+    # Short-term memory lives inside the script directory at memory/ since it
+    # is ephemeral workflow state that should not pollute the master project.
+    memory_short_term_dir: str        # <script_dir>/memory/
 
 
 def load_config(script_dir: str) -> Config:
@@ -129,12 +134,13 @@ def load_config(script_dir: str) -> Config:
     exclude_patterns = raw.get("exclude_patterns") or []
     prompt = raw.get("prompt") or ""
 
-    # Always exclude the memory directory from source context — memory files
+    # Always exclude the .ai-code directory from source context — memory files
     # have their own dedicated injection path and must never be bundled as
-    # regular source code.  Appended unconditionally so that user configs
-    # cannot accidentally include memory content in the source payload.
-    if "memory/" not in exclude_patterns:
-        exclude_patterns.append("memory/")
+    # regular source code.  The long-term memory directory lives at
+    # <parent_of_script_dir>/.ai-code/ so that memory files are tracked in
+    # the master project's git history rather than the ai-code submodule.
+    if ".ai-code/" not in exclude_patterns:
+        exclude_patterns.append(".ai-code/")
 
     # Build the full system prompt by appending the file-output-pattern suffix
     raw_system = raw.get("system") or ""
@@ -173,12 +179,29 @@ def load_config(script_dir: str) -> Config:
     script_dir_name = os.path.basename(script_dir)
     logs_dir = os.path.join(script_dir, "logs")
     claude_output_dir = os.path.join(logs_dir, "claude")
-    memory_dir = os.path.join(script_dir, "memory")
+
+    # Long-term memory directory: lives in the *parent* project at .ai-code/
+    # so that memory files are version-controlled alongside the master
+    # project's source code rather than buried inside the ai-code submodule.
+    #   script_dir          = /project/ai-code/
+    #   memory_long_term_dir = /project/.ai-code/
+    memory_long_term_dir = os.path.join(script_dir, "..", ".ai-code")
+    memory_long_term_dir = os.path.normpath(memory_long_term_dir)
+
+    # Short-term memory directory: lives inside the script directory at memory/
+    # because it is ephemeral workflow state (ai-steps context) that should not
+    # pollute the master project's root.  It is gitignored or excluded from
+    # source context to avoid being sent as regular source data.
+    #   script_dir           = /project/ai-code/
+    #   memory_short_term_dir = /project/ai-code/memory/
+    memory_short_term_dir = os.path.join(script_dir, "memory")
+    memory_short_term_dir = os.path.normpath(memory_short_term_dir)
 
     # Ensure output directories exist
     os.makedirs(logs_dir, exist_ok=True)
     os.makedirs(claude_output_dir, exist_ok=True)
-    os.makedirs(memory_dir, exist_ok=True)
+    os.makedirs(memory_long_term_dir, exist_ok=True)
+    os.makedirs(memory_short_term_dir, exist_ok=True)
 
     return Config(
         source=source,
@@ -205,5 +228,6 @@ def load_config(script_dir: str) -> Config:
         memory_long_term_max_tokens=memory_long_term_max_tokens,
         memory_short_term_max_tokens=memory_short_term_max_tokens,
         memory_auto_update=memory_auto_update,
-        memory_dir=memory_dir,
+        memory_long_term_dir=memory_long_term_dir,
+        memory_short_term_dir=memory_short_term_dir,
     )

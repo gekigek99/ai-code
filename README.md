@@ -24,6 +24,8 @@ A modular Python tool to run Anthropic Claude on your codebase, generate or upda
     ├── validation.py            # Response validation, block_pattern regex
     ├── apply.py                 # File application logic (write/move/delete)
     ├── prompt_builder.py        # Message/content assembly for AI calls
+    ├── memory.py                # Memory system: read/write/assemble memory context
+    ├── token_tracker.py         # Token usage breakdown tracking and ASCII graph
     ├── providers/
     │   ├── __init__.py          # Provider package init
     │   └── claude.py            # Claude-specific: prompt_claude(), streaming, websearch
@@ -39,6 +41,10 @@ A modular Python tool to run Anthropic Claude on your codebase, generate or upda
         ├── workflow_ai.py            # Standard single-shot execution (-ai)
         ├── workflow_gen_source.py     # Source list generation (-gen-source)
         └── workflow_ai_steps.py      # Automated multi-step pipeline (-ai-steps)
+./memory/                        # Short-term workflow memory (inside ai-code dir)
+    └── short-term.md            # Current ai-steps workflow state
+../.ai-code/                     # Long-term project memory (parent project root)
+    └── long-term.md             # Persistent project architecture memory
 ./logs/
     ├── prompt.log               # Prompt history
     ├── userfullprompt.md        # Full assembled prompt export
@@ -68,6 +74,7 @@ A modular Python tool to run Anthropic Claude on your codebase, generate or upda
 - Scans source folders with configurable include/exclude patterns
 - Skips binary files automatically
 - Shows a directory tree of your project with token estimates
+- **Token usage breakdown graph**: displays per-component token estimates (system, long-term memory, short-term memory, git history, file data, prompt) before each API call
 - Streams prompts to Claude and captures responses in real time
 - Writes, updates, moves, and deletes files based on `{'+'*5}` markers
 - Validates response structure before applying changes
@@ -79,6 +86,16 @@ A modular Python tool to run Anthropic Claude on your codebase, generate or upda
 - **Multi-step automated workflow** (`-ai-steps`): expands prompt → decomposes into steps → executes each with user confirmation and git commits
 - **Crash-resilient resume** (`-ai-steps -continue`): resumes an interrupted workflow from the last saved checkpoint
 - **Structured commit messages**: `[category: feature_title]: step X/Y - step_title` for clear git history
+
+## Memory System
+
+The memory system provides Claude with persistent context across invocations:
+
+- **Long-term memory** (`../.ai-code/long-term.md`): Stores project architecture, key files, schema summaries, API routes, conventions. Lives in the parent project root so it's tracked in the master project's git history.
+- **Short-term memory** (`./memory/short-term.md`): Stores current ai-steps workflow state (goal, progress, step list). Lives inside the ai-code directory since it's ephemeral.
+- **Git history**: Last N commits with per-file numstat diffs, providing recent change context.
+
+Memory is automatically injected into every Claude request and updated inline (no separate API calls).
 
 ## Workflows
 
@@ -131,6 +148,26 @@ The workflow saves a checkpoint (`workflow-state.yaml`) after each phase and ste
 - **Dirty tree recovery**: if uncommitted changes are found (from a crash mid-step), they are automatically reverted before resuming.
 
 The state file is automatically removed once all steps have been processed.
+
+## Token Usage Breakdown
+
+Every API call displays a coloured ASCII bar chart showing the token composition:
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  TOKEN USAGE BREAKDOWN                                          │
+│  Total Estimated: ~12,450 tokens                                │
+│                                                                  │
+│  System              ~2,000 tk  ████████░░░░░░░░░░░░░░░░░  16.1%│
+│  Long-term Memory    ~1,200 tk  █████░░░░░░░░░░░░░░░░░░░░   9.6%│
+│  Short-term Memory     ~300 tk  █░░░░░░░░░░░░░░░░░░░░░░░░   2.4%│
+│  Git History           ~800 tk  ███░░░░░░░░░░░░░░░░░░░░░░   6.4%│
+│  File Data           ~7,500 tk  ██████████████████████████  60.2%│
+│  Prompt                ~650 tk  ███░░░░░░░░░░░░░░░░░░░░░░   5.2%│
+└──────────────────────────────────────────────────────────────────┘
+```
+
+This helps identify which components are consuming the most context window space and optimize accordingly.
 
 ## Prerequisites
 
@@ -191,6 +228,17 @@ ANTHROPIC:
 
 WEBSEARCH: false
 WEBSEARCH_MAX_RESULTS: 5
+
+# Memory system configuration
+MEMORY:
+  ENABLED: true
+  LONG_TERM_ENABLED: true       # Stored at ../.ai-code/long-term.md
+  SHORT_TERM_ENABLED: true      # Stored at ./memory/short-term.md
+  GIT_HISTORY_ENABLED: true
+  GIT_HISTORY_COMMITS: 30
+  LONG_TERM_MAX_TOKENS: 2000
+  SHORT_TERM_MAX_TOKENS: 1000
+  AUTO_UPDATE: true
 ```
 
 ## Usage
@@ -220,7 +268,7 @@ Multi-level patterns with `/` are supported: `src/generated/`.
 
 The codebase follows a three-layer architecture:
 
-1. **Infrastructure** (`lib/`): Low-level modules for file I/O, API calls, validation, etc.
+1. **Infrastructure** (`lib/`): Low-level modules for file I/O, API calls, validation, token tracking, etc.
 2. **Tools** (`lib/tools/`): Reusable, stateless functions that compose infrastructure modules into well-defined operations (source generation, prompt execution, expansion, step decomposition, user confirmation).
 3. **Workflows** (`lib/workflows/`): High-level orchestrators that compose tools into complete CLI workflows (`-ai`, `-gen-source`, `-ai-steps`).
 
