@@ -22,6 +22,10 @@ Public API:
         code blocks, so the memory always reflects the current codebase
         state without separate API calls.
 
+        Memory context (long-term, short-term, git history) is also
+        injected during source generation phases so Claude can make
+        informed decisions about which files are relevant.
+
 Commit message format:
     feature_title: category: ai-step X/Y - step_title
     e.g. User Preferences: database: ai-step 1/5 - Add preferences table
@@ -295,6 +299,10 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
     ``extract_and_save_memory_from_response``, so the memory always
     reflects the current codebase state without separate API calls.
 
+    Memory context (long-term, short-term, git history) is also injected
+    into source generation calls so Claude has project awareness when
+    deciding which files are relevant for each phase/step.
+
     When ``args.continue_steps`` is True, the workflow resumes from the
     last saved checkpoint — skipping already-completed phases and steps.
     If uncommitted changes are found (e.g. from a crash), they are
@@ -403,6 +411,10 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
         os.makedirs(phase1_dir, exist_ok=True)
 
         # 1.1 Generate source for prompt expansion
+        # include_short_term_memory=False: short-term memory is not yet
+        # populated at this point (it's created at the end of Phase 1).
+        # Long-term memory and git history ARE included so Claude knows
+        # the project architecture and recent changes when selecting files.
         print("[Phase 1.1] Generating source list for prompt expansion...")
         tree_str = _build_current_tree(cfg, ai_shared_file_types)
 
@@ -412,6 +424,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
             tree_str=tree_str,
             example_source=cfg.source,
             output_dir=phase1_dir,
+            include_short_term_memory=False,
         )
 
         if source_result["status"] != "ok":
@@ -485,6 +498,10 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
         os.makedirs(phase2_dir, exist_ok=True)
 
         # 2.1 Generate source for step-ization
+        # include_short_term_memory=True: short-term memory was populated at
+        # the end of Phase 1 with the workflow goal and expansion summary.
+        # Including it gives Claude awareness of the overall mission when
+        # deciding which files are relevant for decomposition.
         print("[Phase 2.1] Generating source list for step decomposition...")
         tree_str = _build_current_tree(cfg, ai_shared_file_types)
 
@@ -494,6 +511,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
             tree_str=tree_str,
             example_source=cfg.source,
             output_dir=phase2_dir,
+            include_short_term_memory=True,
         )
 
         if step_source_result["status"] != "ok":
@@ -612,7 +630,11 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
 
         while True:
             # ── 3.1 Generate fresh source for this step ─────────────────────
-            # Rebuild tree because previous steps may have changed files
+            # Rebuild tree because previous steps may have changed files.
+            # include_short_term_memory=True: during step execution, short-term
+            # memory contains the full step list, progress markers, and current
+            # step context — critical for Claude to understand which files are
+            # relevant in the context of the overall implementation plan.
             print(f"{prefix} Generating source list...")
             tree_str = _build_current_tree(cfg, ai_shared_file_types)
 
@@ -622,6 +644,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
                 tree_str=tree_str,
                 example_source=step_source if step_source else cfg.source,
                 output_dir=os.path.join(step_dir, f"source-gen-attempt-{retry_count}"),
+                include_short_term_memory=True,
             )
 
             if step_source_result["status"] != "ok":
