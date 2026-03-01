@@ -94,9 +94,9 @@ class Config:
     memory_long_term_max_tokens: int  # Soft cap: triggers compaction when exceeded
     memory_short_term_max_tokens: int # Soft cap for short-term memory
     memory_auto_update: bool          # Auto-update project memory after each execution
-    # Long-term memory lives in the *parent* project at .ai-code/ so it is
-    # tracked in the master project's git history, not the ai-code submodule.
-    memory_long_term_dir: str         # <parent_of_script_dir>/.ai-code/
+    # Long-term memory lives in the *parent* project at .ai-code/memory/ so it
+    # is tracked in the master project's git history, not the ai-code submodule.
+    memory_long_term_dir: str         # <parent_of_script_dir>/.ai-code/memory/
     # Short-term memory lives inside the script directory at memory/ since it
     # is ephemeral workflow state that should not pollute the master project.
     memory_short_term_dir: str        # <script_dir>/memory/
@@ -137,8 +137,8 @@ def load_config(script_dir: str) -> Config:
     # Always exclude the .ai-code directory from source context — memory files
     # have their own dedicated injection path and must never be bundled as
     # regular source code.  The long-term memory directory lives at
-    # <parent_of_script_dir>/.ai-code/ so that memory files are tracked in
-    # the master project's git history rather than the ai-code submodule.
+    # <parent_of_script_dir>/.ai-code/memory/ so that memory files are tracked
+    # in the master project's git history rather than the ai-code submodule.
     if ".ai-code/" not in exclude_patterns:
         exclude_patterns.append(".ai-code/")
 
@@ -180,12 +180,14 @@ def load_config(script_dir: str) -> Config:
     logs_dir = os.path.join(script_dir, "logs")
     claude_output_dir = os.path.join(logs_dir, "claude")
 
-    # Long-term memory directory: lives in the *parent* project at .ai-code/
-    # so that memory files are version-controlled alongside the master
-    # project's source code rather than buried inside the ai-code submodule.
-    #   script_dir          = /project/ai-code/
-    #   memory_long_term_dir = /project/.ai-code/
-    memory_long_term_dir = os.path.join(script_dir, "..", ".ai-code")
+    # Long-term memory directory: lives in the *parent* project at
+    # .ai-code/memory/ so that memory files are version-controlled alongside
+    # the master project's source code rather than buried inside the ai-code
+    # submodule.  The extra memory/ subdirectory keeps the .ai-code/ root
+    # clean for future non-memory config files.
+    #   script_dir           = /project/ai-code/
+    #   memory_long_term_dir = /project/.ai-code/memory/
+    memory_long_term_dir = os.path.join(script_dir, "..", ".ai-code", "memory")
     memory_long_term_dir = os.path.normpath(memory_long_term_dir)
 
     # Short-term memory directory: lives inside the script directory at memory/

@@ -57,8 +57,8 @@ class TokenBreakdown:
 
 # ── Bar chart configuration ──────────────────────────────────────────────────
 _BAR_WIDTH = 25       # Number of characters for the bar
-_BAR_FILLED = "■"
-_BAR_EMPTY = " "
+_BAR_FILLED = "█"
+_BAR_EMPTY = " "
 _LABEL_WIDTH = 18     # Padding for component labels
 _TOKEN_WIDTH = 10     # Padding for token count column
 
@@ -87,7 +87,7 @@ def display_token_breakdown(breakdown: TokenBreakdown) -> None:
         filled_count = max(filled_count, 1) if tokens > 0 else 0  # at least 1 bar if non-zero
         empty_count = _BAR_WIDTH - filled_count
 
-        bar = _BAR_FILLED * filled_count + _BAR_EMPTY * empty_count
+        bar = _BAR_FILLED * filled_count + _BAR_EMPTY * empty_count + "|"
         token_str = f"~{tokens:,} tk"
 
         # Build the line with consistent padding

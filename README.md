@@ -44,7 +44,8 @@ A modular Python tool to run Anthropic Claude on your codebase, generate or upda
 ./memory/                        # Short-term workflow memory (inside ai-code dir)
     └── short-term.md            # Current ai-steps workflow state
 ../.ai-code/                     # Long-term project memory (parent project root)
-    └── long-term.md             # Persistent project architecture memory
+    └── memory/
+        └── long-term.md         # Persistent project architecture memory
 ./logs/
     ├── prompt.log               # Prompt history
     ├── userfullprompt.md        # Full assembled prompt export
@@ -91,7 +92,7 @@ A modular Python tool to run Anthropic Claude on your codebase, generate or upda
 
 The memory system provides Claude with persistent context across invocations:
 
-- **Long-term memory** (`../.ai-code/long-term.md`): Stores project architecture, key files, schema summaries, API routes, conventions. Lives in the parent project root so it's tracked in the master project's git history.
+- **Long-term memory** (`../.ai-code/memory/long-term.md`): Stores project architecture, key files, schema summaries, API routes, conventions. Lives in the parent project root at `.ai-code/memory/` so it's tracked in the master project's git history.
 - **Short-term memory** (`./memory/short-term.md`): Stores current ai-steps workflow state (goal, progress, step list). Lives inside the ai-code directory since it's ephemeral.
 - **Git history**: Last N commits with per-file numstat diffs, providing recent change context.
 
@@ -232,7 +233,7 @@ WEBSEARCH_MAX_RESULTS: 5
 # Memory system configuration
 MEMORY:
   ENABLED: true
-  LONG_TERM_ENABLED: true       # Stored at ../.ai-code/long-term.md
+  LONG_TERM_ENABLED: true       # Stored at ../.ai-code/memory/long-term.md
   SHORT_TERM_ENABLED: true      # Stored at ./memory/short-term.md
   GIT_HISTORY_ENABLED: true
   GIT_HISTORY_COMMITS: 30

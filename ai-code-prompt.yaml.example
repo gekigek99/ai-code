@@ -53,12 +53,15 @@ WEBSEARCH: false
 WEBSEARCH_MAX_RESULTS: 5
 
 # Memory system: provides Claude with persistent context across invocations.
-# Long-term memory tracks project architecture, short-term tracks ai-steps workflow state,
-# git history provides recent commit context.
+# Long-term memory is stored at <project_root>/.ai-code/memory/long-term.md and
+# tracked in the master project's git history.
+# Short-term memory is stored at <ai-code-dir>/memory/short-term.md for
+# ephemeral ai-steps workflow state.
+# Git history provides recent commit context.
 MEMORY:
   ENABLED: true                    # Master toggle for entire memory system
-  LONG_TERM_ENABLED: true          # Toggle long-term project memory (memory/long-term.md)
-  SHORT_TERM_ENABLED: true         # Toggle short-term ai-steps memory (memory/short-term.md)
+  LONG_TERM_ENABLED: true          # Toggle long-term project memory (../.ai-code/memory/long-term.md)
+  SHORT_TERM_ENABLED: true         # Toggle short-term ai-steps memory (./memory/short-term.md)
   GIT_HISTORY_ENABLED: true        # Toggle git history context (last N commits)
   GIT_HISTORY_COMMITS: 30          # Number of recent commits to include
   LONG_TERM_MAX_TOKENS: 2000      # Soft cap: triggers compaction when exceeded

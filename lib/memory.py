@@ -5,12 +5,12 @@ Manages reading, writing, assembling, and inline-updating project memory
 that is injected into LLM prompts to provide cross-session continuity.
 
 Memory updates are performed **inline**: the main execution prompt includes
-instructions for Claude to output a ``.ai-code/long-term.md`` file
+instructions for Claude to output a ``.ai-code/memory/long-term.md`` file
 block alongside regular code blocks.  This eliminates separate API calls
 for memory updates, saving tokens and latency.
 
 Memory layout:
-    Long-term memory:  ``<parent_of_script_dir>/.ai-code/long-term.md``
+    Long-term memory:  ``<parent_of_script_dir>/.ai-code/memory/long-term.md``
         Tracked in the master project's git history.
     Short-term memory: ``<script_dir>/memory/short-term.md``
         Ephemeral workflow state; lives inside the ai-code tool directory.
@@ -30,7 +30,7 @@ Public API:
 
     build_memory_update_instructions(cfg) -> str
         Build instructions appended to the user prompt that ask Claude to
-        output an updated ``.ai-code/long-term.md`` block inline with
+        output an updated ``.ai-code/memory/long-term.md`` block inline with
         other file blocks.  Returns empty string when memory updates are disabled.
 
     extract_and_save_memory_from_response(cfg, response_text) -> str
@@ -56,11 +56,13 @@ _LONG_TERM_FILENAME = "long-term.md"
 _SHORT_TERM_FILENAME = "short-term.md"
 
 # Relative path used in Claude's file output blocks for the memory file.
-# This path is relative to the project root (the parent of the ai-code dir).
-# Claude outputs this path in its {'+'*5} block header, and
-# extract_and_save_memory_from_response matches against it.
-# Long-term lives directly inside .ai-code/ (no memory/ subfolder).
-_MEMORY_BLOCK_PATH = ".ai-code/long-term.md"
+# This path is relative to the ai-code script directory (the working dir
+# when ai-code runs).  Claude outputs this path in its {'+'*5} block header,
+# and extract_and_save_memory_from_response matches against it.
+#
+# Layout:  <project_root>/.ai-code/memory/long-term.md
+# From ai-code dir: ../.ai-code/memory/long-term.md
+_MEMORY_BLOCK_PATH = "../.ai-code/memory/long-term.md"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -86,6 +88,10 @@ class MemoryBlockResult:
 
 def load_long_term_memory(memory_long_term_dir: str) -> str:
     """Read ``long-term.md`` from *memory_long_term_dir* and return its contents.
+
+    *memory_long_term_dir* is expected to be ``<project_root>/.ai-code/memory/``
+    (resolved by config.py).  The file read is
+    ``<project_root>/.ai-code/memory/long-term.md``.
 
     Returns an empty string when the file does not exist (first run).
     """
@@ -268,13 +274,13 @@ def build_memory_update_instructions(cfg: Config) -> str:
     """Build instructions that ask Claude to output an updated memory file inline.
 
     These instructions are appended to the user prompt so that Claude
-    produces a ``.ai-code/long-term.md`` file block alongside its
+    produces a ``.ai-code/memory/long-term.md`` file block alongside its
     regular code output — eliminating the need for a separate API call to
     update memory.  Claude already has the existing memory from the
     ``[MEMORY START]`` context block and sees all source files in the
     prompt, so it has everything needed to produce an accurate update.
 
-    The memory file path uses ``.ai-code/`` so it is stored in the
+    The memory file path uses ``.ai-code/memory/`` so it is stored in the
     master project root and tracked in the master project's git history.
 
     Parameters
@@ -360,7 +366,7 @@ def extract_and_save_memory_from_response(cfg: Config, response_text: str) -> st
         Resolved configuration (provides ``memory_long_term_dir`` and toggles).
     response_text : str
         The full Claude response text potentially containing a
-        ``.ai-code/long-term.md`` file block.
+        ``.ai-code/memory/long-term.md`` file block.
 
     Returns
     -------
@@ -380,15 +386,11 @@ def extract_and_save_memory_from_response(cfg: Config, response_text: str) -> st
 
         # Match any path ending with the long-term memory filename that
         # also includes the .ai-code path segment, e.g.:
-        #   "./.ai-code/long-term.md"
-        #   ".ai-code/long-term.md"
-        # Also keep backward compatibility with the old "memory/long-term.md"
-        # path in case Claude outputs it with an extra memory/ prefix.
+        #   "./.ai-code/memory/long-term.md"
+        #   "../.ai-code/memory/long-term.md"
+        #   ".ai-code/memory/long-term.md"
         norm_source = source_path.replace("\\", "/")
-        if norm_source.endswith(_LONG_TERM_FILENAME) and (
-            ".ai-code/" in norm_source
-            or norm_source.endswith("memory/" + _LONG_TERM_FILENAME)
-        ):
+        if norm_source.endswith(_LONG_TERM_FILENAME) and ".ai-code/" in norm_source:
             content = m.group("content").strip()
 
             if content:
@@ -405,5 +407,5 @@ def extract_and_save_memory_from_response(cfg: Config, response_text: str) -> st
 
     # No memory block found — this is not an error; Claude may have chosen
     # not to output one (e.g. for very small changes).  Log for visibility.
-    warn("[memory] No .ai-code/long-term.md block found in response — memory not updated.")
+    warn("[memory] No .ai-code/memory/long-term.md block found in response — memory not updated.")
     return response_text
