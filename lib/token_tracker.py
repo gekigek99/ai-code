@@ -5,6 +5,10 @@ Public API:
     TokenBreakdown  — dataclass tracking per-component token estimates.
     display_token_breakdown(breakdown) -> None
         Print a coloured ASCII bar chart of token usage to stdout.
+    compute_and_display_breakdown(**kwargs) -> TokenBreakdown
+        Unified function: compute token estimates from raw inputs, display
+        the bar chart, and return the populated TokenBreakdown.  All tools
+        and workflows should use this instead of manually setting fields.
 
 Token estimates use the ~chars/4 heuristic, consistent with the rest of the
 codebase.  These are rough approximations — actual tokenisation varies by
@@ -12,7 +16,7 @@ model — but sufficient for cost/context-window awareness.
 """
 
 from dataclasses import dataclass, field
-from typing import List, Tuple
+from typing import Any, List, Optional, Tuple
 
 from lib.utils import COLOR_CYAN, COLOR_GREEN, COLOR_YELLOW, COLOR_RESET
 
@@ -129,3 +133,95 @@ def display_token_breakdown(breakdown: TokenBreakdown) -> None:
         pct_str = f"{pct:5.1f}%"
 
         print(f"{COLOR_CYAN} └ {padded_label}{padded_tokens}  {bar}  {pct_str}{COLOR_RESET}")
+
+
+def compute_and_display_breakdown(
+    *,
+    system: str = "",
+    memory_result: Any = None,
+    files_to_ai: Optional[List[Any]] = None,
+    ai_file_listing: str = "",
+    user_prompt: str = "",
+    tool_context_chars: int = 0,
+    memory_instructions: str = "",
+) -> TokenBreakdown:
+    """Unified token breakdown computation, display, and return.
+
+    Computes token estimates from raw inputs using the ~chars/4 heuristic,
+    displays the ASCII bar chart, and returns the populated TokenBreakdown.
+
+    All tools and workflows should use this single entry point instead of
+    manually constructing a TokenBreakdown and setting fields — which is
+    error-prone (e.g. setting nonexistent field names on the dataclass
+    silently creates orphan attributes that ``total`` never includes).
+
+    Parameters
+    ----------
+    system : str
+        The full system prompt text.  Tokens estimated as ``len // 4``.
+    memory_result : object, optional
+        Result from ``build_memory_block()``.  Must have attributes:
+        ``long_term_tokens``, ``short_term_tokens``, ``git_history_tokens``.
+        If None, all memory token counts default to 0.
+    files_to_ai : list[FileData], optional
+        List of discovered file objects.  Source file tokens are computed as
+        ``sum(f.ai_data_tokens for f in files_to_ai if f.ai_share)``.
+        If None or empty, source_files defaults to 0.
+    ai_file_listing : str
+        The directory tree listing string.  For gen-source workflows this
+        is the ``tree_str``; for other tools it is the ``ai_file_listing``
+        returned by ``get_directory_tree()``.  Tokens estimated as
+        ``len // 4``.
+    user_prompt : str
+        The user's raw prompt text (from yaml ``prompt`` field or the
+        minimal/expanded prompt in ai-steps).  This is the *semantic*
+        user request, excluding any tool wrapper instructions.
+    tool_context_chars : int
+        Pre-computed character count for tool-specific overhead
+        (meta-instructions, example data, section headers) that wraps or
+        accompanies the user prompt.  Callers typically compute this as
+        ``len(meta_prompt) - len(user_prompt)`` or by summing the
+        non-prompt/non-tree parts of the assembled message.
+        Tokens estimated as ``chars // 4``.  Defaults to 0.
+    memory_instructions : str
+        Inline memory update instructions appended to the prompt.
+        Only used by ``execute_prompt`` when ``cfg.memory_auto_update``
+        is True.  Tokens estimated as ``len // 4``.
+
+    Returns
+    -------
+    TokenBreakdown
+        Fully populated breakdown with all component token estimates.
+    """
+    breakdown = TokenBreakdown()
+
+    # System prompt
+    breakdown.system = len(system) // 4
+
+    # Memory components — extracted from the memory_result object returned by
+    # build_memory_block().  Uses getattr for resilience against missing attrs.
+    if memory_result is not None:
+        breakdown.long_term_memory = getattr(memory_result, "long_term_tokens", 0)
+        breakdown.short_term_memory = getattr(memory_result, "short_term_tokens", 0)
+        breakdown.git_history = getattr(memory_result, "git_history_tokens", 0)
+
+    # Source file content — sum of per-file token estimates for all shared files
+    if files_to_ai:
+        breakdown.source_files = sum(
+            f.ai_data_tokens for f in files_to_ai if f.ai_share
+        )
+
+    # Directory tree listing
+    breakdown.file_tree = len(ai_file_listing) // 4
+
+    # User prompt (the semantic request, excluding tool wrappers)
+    breakdown.user_prompt = len(user_prompt) // 4
+
+    # Tool-specific overhead (meta-instructions, examples, section headers)
+    breakdown.tool_context = max(0, tool_context_chars // 4)
+
+    # Inline memory update instructions
+    breakdown.memory_instructions = len(memory_instructions) // 4
+
+    display_token_breakdown(breakdown)
+    return breakdown

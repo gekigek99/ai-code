@@ -28,7 +28,7 @@ from lib.memory import (
     build_memory_update_instructions,
     extract_and_save_memory_from_response,
 )
-from lib.token_tracker import TokenBreakdown, display_token_breakdown
+from lib.token_tracker import compute_and_display_breakdown
 from lib.providers.claude import prompt_claude
 from lib.validation import validate_claude_response
 from lib.apply import claude_data_to_file
@@ -114,10 +114,6 @@ def execute_prompt(
 
     os.makedirs(output_dir, exist_ok=True)
 
-    # ── Token breakdown tracker ──────────────────────────────────────────────
-    breakdown = TokenBreakdown()
-    breakdown.system = len(cfg.system) // 4
-
     # ── 1. Prepare files_to_ai with optional images ─────────────────────────
     files_to_ai: List[FileData] = []
     if image_paths:
@@ -140,11 +136,6 @@ def execute_prompt(
     memory_result = build_memory_block(cfg, include_short_term=include_short_term_memory)
     memory_block = memory_result.text
 
-    # Transfer memory token counts to the breakdown tracker
-    breakdown.long_term_memory = memory_result.long_term_tokens
-    breakdown.short_term_memory = memory_result.short_term_tokens
-    breakdown.git_history = memory_result.git_history_tokens
-
     if memory_block:
         print(f"[tool_prompt_execute] Memory block: {len(memory_block)} chars "
               f"(~{len(memory_block) // 4} tokens | "
@@ -162,10 +153,6 @@ def execute_prompt(
     if memory_instructions:
         print(f"[tool_prompt_execute] Inline memory update instructions appended ({len(memory_instructions)} chars)")
 
-    # Track token counts separately: user prompt vs memory update instructions
-    breakdown.user_prompt = len(prompt) // 4
-    breakdown.memory_instructions = len(memory_instructions) // 4 if memory_instructions else 0
-
     # ── 4. Build message content ─────────────────────────────────────────────
     # Pass the memory block so it is prepended as the first content item,
     # establishing project context before source files and the user prompt.
@@ -173,15 +160,15 @@ def execute_prompt(
         files_to_ai, full_prompt, ai_file_listing, memory_block=memory_block,
     )
 
-    # Track source file tokens — sum of all shared file token estimates
-    breakdown.source_files = sum(
-        f.ai_data_tokens for f in files_to_ai if f.ai_share
+    # ── Display token breakdown ──────────────────────────────────────────────
+    compute_and_display_breakdown(
+        system=cfg.system,
+        memory_result=memory_result,
+        files_to_ai=files_to_ai,
+        ai_file_listing=ai_file_listing,
+        user_prompt=prompt,
+        memory_instructions=memory_instructions,
     )
-    # Track directory tree listing tokens separately from source file content
-    breakdown.file_tree = len(ai_file_listing) // 4
-
-    # ── Display token breakdown graph ────────────────────────────────────────
-    display_token_breakdown(breakdown)
 
     # ── 5. Export assembled prompt for record-keeping ────────────────────────
     # Include the memory block and memory instructions in the exported prompt

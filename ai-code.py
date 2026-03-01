@@ -32,7 +32,7 @@ from lib.export import export_md_file, log_prompt
 from lib.validation import validate_claude_response
 from lib.apply import claude_data_to_file
 from lib.prompt_builder import build_message_content
-from lib.token_tracker import TokenBreakdown, display_token_breakdown
+from lib.token_tracker import compute_and_display_breakdown
 from lib.memory import build_memory_block, build_memory_update_instructions
 from lib.utils import warn
 
@@ -139,22 +139,15 @@ def main() -> None:
         files_to_ai, full_prompt, ai_file_listing, memory_block=memory_result.text,
     )
 
-    # ── Token breakdown for dry run ──────────────────────────────────────────
-    breakdown = TokenBreakdown()
-    breakdown.system = len(cfg.system) // 4
-    breakdown.long_term_memory = memory_result.long_term_tokens
-    breakdown.short_term_memory = memory_result.short_term_tokens
-    breakdown.git_history = memory_result.git_history_tokens
-    # Source file content tokens (actual file data shared with LLM)
-    breakdown.source_files = sum(f.ai_data_tokens for f in files_to_ai if f.ai_share)
-    # Directory tree listing tokens (project file structure)
-    breakdown.file_tree = len(ai_file_listing) // 4
-    # User prompt from yaml (the actual task/instruction)
-    breakdown.user_prompt = len(cfg.prompt) // 4
-    # Memory update instructions appended to prompt (if enabled)
-    breakdown.memory_instructions = len(memory_instructions) // 4 if memory_instructions else 0
-
-    display_token_breakdown(breakdown)
+    # ── Token breakdown for dry run (unified function) ───────────────────────
+    compute_and_display_breakdown(
+        system=cfg.system,
+        memory_result=memory_result,
+        files_to_ai=files_to_ai,
+        ai_file_listing=ai_file_listing,
+        user_prompt=cfg.prompt,
+        memory_instructions=memory_instructions,
+    )
 
     # Export assembled prompt for record-keeping
     export_md_file(

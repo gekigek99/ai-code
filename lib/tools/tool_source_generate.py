@@ -23,7 +23,7 @@ import yaml
 from lib.config import Config
 from lib.export import export_md_file
 from lib.memory import build_memory_block
-from lib.token_tracker import TokenBreakdown, display_token_breakdown
+from lib.token_tracker import compute_and_display_breakdown
 from lib.prompt_builder import generate_prompt_for_gen_source
 from lib.providers.claude import prompt_claude
 from lib.validation import block_pattern, validate_claude_response
@@ -83,10 +83,6 @@ def generate_source(
 
     os.makedirs(output_dir, exist_ok=True)
 
-    # ── Token breakdown tracker ──────────────────────────────────────────────
-    breakdown = TokenBreakdown()
-    breakdown.system = len(cfg.system) // 4
-
     # ── Build memory context block ───────────────────────────────────────────
     # Assemble long-term memory, short-term memory (if requested), and git
     # history (commit messages, titles, per-file line diffs) into a single
@@ -100,11 +96,6 @@ def generate_source(
     )
     memory_block = memory_result.text
 
-    # Transfer memory token counts to breakdown
-    breakdown.long_term_memory = memory_result.long_term_tokens
-    breakdown.short_term_memory = memory_result.short_term_tokens
-    breakdown.git_history = memory_result.git_history_tokens
-
     if memory_block:
         print(f"[tool_source_generate] Memory block: {len(memory_block)} chars "
               f"(~{len(memory_block) // 4} tokens | "
@@ -114,26 +105,14 @@ def generate_source(
     # ── Build the gen-source message ─────────────────────────────────────────
     message_content = generate_prompt_for_gen_source(prompt, example_source, tree_str)
 
-    # ── Compute per-component token estimates ────────────────────────────────
-    # Track the user's yaml prompt and directory tree separately from
-    # tool-specific overhead (meta-instructions, section headers, example
-    # source YAML).  We compute tool_context as the remainder after
-    # subtracting known components from the total gen-source message size.
-    # This avoids duplicating the message-building logic from
-    # generate_prompt_for_gen_source.
-    breakdown.user_prompt = len(prompt) // 4
-    breakdown.file_tree = len(tree_str) // 4
-    # No source file content in gen-source (only tree + prompt + memory)
-    breakdown.source_files = 0
-
+    # ── Compute tool_context_chars ───────────────────────────────────────────
     # Tool context = total gen-source message chars minus the raw prompt and
-    # tree that we already track.  This captures meta-instructions ("REQUEST:
-    # Generate a new adapted source..."), section headers ("--- ADAPT SOURCE
-    # TO THIS PROMPT ---"), and the example source YAML — all tool-specific
-    # overhead that varies by tool.
+    # tree that we already track separately.  This captures meta-instructions
+    # ("REQUEST: Generate a new adapted source..."), section headers ("---
+    # ADAPT SOURCE TO THIS PROMPT ---"), and the example source YAML — all
+    # tool-specific overhead that varies by tool.
     gen_source_total_chars = sum(len(part.get("text", "")) for part in message_content)
-    tool_context_chars = gen_source_total_chars - len(prompt) - len(tree_str)
-    breakdown.tool_context = max(0, tool_context_chars // 4)
+    tool_context_chars = max(0, gen_source_total_chars - len(prompt) - len(tree_str))
 
     # Prepend memory block as the first content item so Claude sees project
     # context (architecture, recent commits, workflow state) before the
@@ -143,8 +122,17 @@ def generate_source(
     if memory_block:
         message_content.insert(0, {"type": "text", "text": memory_block})
 
-    # ── Display token breakdown graph ────────────────────────────────────────
-    display_token_breakdown(breakdown)
+    # ── Display token breakdown ──────────────────────────────────────────────
+    # No source file content in gen-source (only tree + prompt + memory).
+    # ai_file_listing=tree_str because for gen-source the tree IS the listing.
+    compute_and_display_breakdown(
+        system=cfg.system,
+        memory_result=memory_result,
+        files_to_ai=None,
+        ai_file_listing=tree_str,
+        user_prompt=prompt,
+        tool_context_chars=tool_context_chars,
+    )
 
     print("\n[tool_source_generate] Asking Claude for relevant source list...")
 
