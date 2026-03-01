@@ -114,9 +114,26 @@ def generate_source(
     # ── Build the gen-source message ─────────────────────────────────────────
     message_content = generate_prompt_for_gen_source(prompt, example_source, tree_str)
 
-    # Track prompt tokens — the gen-source meta-prompt + user prompt + tree
-    prompt_tokens = sum(len(part.get("text", "")) for part in message_content) // 4
-    breakdown.prompt = prompt_tokens
+    # ── Compute per-component token estimates ────────────────────────────────
+    # Track the user's yaml prompt and directory tree separately from
+    # tool-specific overhead (meta-instructions, section headers, example
+    # source YAML).  We compute tool_context as the remainder after
+    # subtracting known components from the total gen-source message size.
+    # This avoids duplicating the message-building logic from
+    # generate_prompt_for_gen_source.
+    breakdown.user_prompt = len(prompt) // 4
+    breakdown.file_tree = len(tree_str) // 4
+    # No source file content in gen-source (only tree + prompt + memory)
+    breakdown.source_files = 0
+
+    # Tool context = total gen-source message chars minus the raw prompt and
+    # tree that we already track.  This captures meta-instructions ("REQUEST:
+    # Generate a new adapted source..."), section headers ("--- ADAPT SOURCE
+    # TO THIS PROMPT ---"), and the example source YAML — all tool-specific
+    # overhead that varies by tool.
+    gen_source_total_chars = sum(len(part.get("text", "")) for part in message_content)
+    tool_context_chars = gen_source_total_chars - len(prompt) - len(tree_str)
+    breakdown.tool_context = max(0, tool_context_chars // 4)
 
     # Prepend memory block as the first content item so Claude sees project
     # context (architecture, recent commits, workflow state) before the
@@ -125,9 +142,6 @@ def generate_source(
     # build_message_content() in prompt_builder.py.
     if memory_block:
         message_content.insert(0, {"type": "text", "text": memory_block})
-
-    # gen-source has no file data (only tree + memory + prompt)
-    breakdown.file_data = 0
 
     # ── Display token breakdown graph ────────────────────────────────────────
     display_token_breakdown(breakdown)

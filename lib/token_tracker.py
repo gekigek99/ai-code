@@ -32,6 +32,10 @@ class TokenBreakdown:
       - source_files:        Content of all source files shared with the LLM
       - file_tree:           The project directory tree listing
       - user_prompt:         The user's prompt text (from yaml ``prompt`` field)
+      - tool_context:        Tool-specific overhead — meta-instructions, example
+                             data, section headers, etc. sent by tools like
+                             gen-source, expand, or stepize alongside the user
+                             prompt.  Zero for standard -ai workflows.
       - memory_instructions: Inline memory update instructions appended to prompt
     """
     system: int = 0               # System prompt tokens
@@ -41,6 +45,7 @@ class TokenBreakdown:
     source_files: int = 0         # Source file content tokens
     file_tree: int = 0            # Directory tree listing tokens
     user_prompt: int = 0          # User prompt from yaml tokens
+    tool_context: int = 0         # Tool-specific meta-instructions / example data tokens
     memory_instructions: int = 0  # Inline memory update instructions tokens
 
     @property
@@ -54,6 +59,7 @@ class TokenBreakdown:
             + self.source_files
             + self.file_tree
             + self.user_prompt
+            + self.tool_context
             + self.memory_instructions
         )
 
@@ -72,6 +78,7 @@ class TokenBreakdown:
             ("Source Files", self.source_files),
             ("File Tree", self.file_tree),
             ("User Prompt", self.user_prompt),
+            ("Tool Context", self.tool_context),
             ("Memory Instructions", self.memory_instructions),
         ]
 
