@@ -62,6 +62,9 @@ def execute_prompt(
     the memory block is extracted, saved, and stripped before applying
     code changes to disk.  No separate API calls are made for memory.
 
+    Web search is forwarded from ``cfg.websearch`` to ``prompt_claude()``,
+    allowing Claude to search the web during generation when enabled.
+
     Parameters
     ----------
     cfg : Config
@@ -153,6 +156,11 @@ def execute_prompt(
     if memory_instructions:
         print(f"[tool_prompt_execute] Inline memory update instructions appended ({len(memory_instructions)} chars)")
 
+    # Log websearch status for this execution — important for debugging
+    # whether Claude had web access during this specific call.
+    if cfg.websearch:
+        print(f"[tool_prompt_execute] Web search: ENABLED (max_results={cfg.websearch_max_results})")
+
     # ── 4. Build message content ─────────────────────────────────────────────
     # Pass the memory block so it is prepended as the first content item,
     # establishing project context before source files and the user prompt.
@@ -185,6 +193,9 @@ def execute_prompt(
     )
 
     # ── 6. Call Claude ───────────────────────────────────────────────────────
+    # websearch and websearch_max_results are forwarded from cfg so that
+    # Claude can perform web searches when enabled — applies to all workflows
+    # (ai, ai-steps, gen-source) uniformly.
     print(f"\n[tool_prompt_execute] Sending request to Claude...")
     result = prompt_claude(
         api_key=cfg.anthropic_api_key,

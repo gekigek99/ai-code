@@ -82,9 +82,12 @@ def prompt_claude(
 
     messages = messages or []
 
+    # ── Build tools list ─────────────────────────────────────────────────────
+    # Web search tool is only added when explicitly enabled.  The status is
+    # logged once per call (not "WEBSEARCH active!" on every call, which was
+    # noisy in multi-step workflows).
     tools: list = []
     if websearch:
-        print("WEBSEARCH active!")
         tools = [{
             "name": "web_search",
             "type": "web_search_20250305",
@@ -106,13 +109,17 @@ def prompt_claude(
         "temperature": float(temperature),
         "system": system,
         "messages": messages,
-        "tools": tools if tools else [],
         "thinking": (
             {"type": "enabled", "budget_tokens": int(thinking_budget)}
             if thinking_budget and int(thinking_budget) > 0
             else {"type": "disabled"}
         ),
     }
+
+    # Only include tools key when tools are present — some API configurations
+    # may behave differently with an empty tools list vs no tools key at all.
+    if tools:
+        api_kwargs["tools"] = tools
 
     # ── Dispatch to streaming or synchronous handler ─────────────────────────
     if stream:

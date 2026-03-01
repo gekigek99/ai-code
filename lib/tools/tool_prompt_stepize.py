@@ -5,6 +5,9 @@ Public API:
     stepize_prompt(cfg, expanded_prompt, source_paths) -> dict
         Ask Claude to break an expanded prompt into atomic, ordered steps.
         Returns steps with ``category`` fields and a ``feature_title``.
+
+        Web search is forwarded from ``cfg.websearch`` to ``prompt_claude()``
+        so Claude can search the web when enabled in the configuration.
 """
 
 import os
@@ -37,6 +40,10 @@ def stepize_prompt(
     Claude receives the source file content, long-term project memory, and a
     meta-prompt instructing it to produce a YAML step list in a
     ``{'+'*5} ./steps.yaml [EDIT]`` block.
+
+    Web search is forwarded from ``cfg.websearch`` and
+    ``cfg.websearch_max_results`` to ``prompt_claude()``, allowing Claude
+    to search the web during step decomposition when enabled.
 
     Parameters
     ----------
@@ -100,6 +107,10 @@ def stepize_prompt(
     memory_result = build_memory_block(cfg, include_short_term=False)
     memory_block = memory_result.text
 
+    # Log websearch status for this specific tool invocation
+    if cfg.websearch:
+        print(f"[tool_prompt_stepize] Web search: ENABLED (max_results={cfg.websearch_max_results})")
+
     # ── 3. Build the stepize meta-prompt ─────────────────────────────────────
     meta_prompt = build_stepize_meta_prompt(expanded_prompt)
 
@@ -124,6 +135,9 @@ def stepize_prompt(
     )
 
     # ── 5. Call Claude ───────────────────────────────────────────────────────
+    # websearch and websearch_max_results are forwarded from cfg so that
+    # Claude can perform web searches when enabled — applies uniformly to
+    # all tool invocations within any workflow.
     print("[tool_prompt_stepize] Asking Claude to decompose prompt into steps...")
     result = prompt_claude(
         api_key=cfg.anthropic_api_key,

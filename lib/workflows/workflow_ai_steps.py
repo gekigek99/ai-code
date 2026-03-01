@@ -280,6 +280,13 @@ def _print_summary(completed: int, skipped: int, total: int) -> None:
     print(f"{'=' * 60}\n")
 
 
+def _websearch_status_str(cfg: Config) -> str:
+    """Return a human-readable string describing websearch configuration."""
+    if cfg.websearch:
+        return f"ENABLED (max_results={cfg.websearch_max_results})"
+    return "DISABLED"
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Main workflow
 # ══════════════════════════════════════════════════════════════════════════════
@@ -399,8 +406,16 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
             print("Please commit or stash all changes before running -ai-steps.")
             sys.exit(1)
 
+    # ── Show workflow configuration ──────────────────────────────────────────
+    # Display all relevant settings upfront so the user knows what's active
+    # for the entire multi-step workflow.  Web search status is especially
+    # important since it applies to all API calls (source gen, expand,
+    # stepize, and execute).
     print(f"\n{'=' * 60}")
     print(f"  AI-STEPS WORKFLOW")
+    print(f"  Model: {cfg.anthropic_model}")
+    print(f"  Web search: {_websearch_status_str(cfg)}")
+    print(f"  Extended thinking: {'ENABLED (budget=' + str(cfg.anthropic_max_tokens_think) + ')' if cfg.anthropic_max_tokens_think > 0 else 'DISABLED'}")
     print(f"  Minimal prompt: {cfg.prompt[:80]}{'...' if len(cfg.prompt) > 80 else ''}")
     if continue_mode:
         print(f"  Mode: RESUMING from saved checkpoint")
@@ -600,6 +615,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
     print(f"\n{COLOR_CYAN}{'─' * 60}")
     print(f"  PHASE 3: STEP EXECUTION ({total_steps} steps total)")
     print(f"  Feature: {feature_title}")
+    print(f"  Web search: {_websearch_status_str(cfg)}")
     if completed_count or skipped_count:
         print(f"  Resuming: {completed_count} completed, {skipped_count} skipped, "
               f"{total_steps - completed_count - skipped_count} remaining")

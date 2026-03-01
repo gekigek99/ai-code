@@ -13,6 +13,9 @@ Public API:
         about which source files are relevant — e.g. knowing which files
         were recently modified, what the project architecture looks like,
         and what the current workflow step involves.
+
+        Web search is forwarded from ``cfg.websearch`` to ``prompt_claude()``
+        so Claude can search the web when enabled in the configuration.
 """
 
 import os
@@ -45,11 +48,15 @@ def generate_source(
     project awareness when deciding which files are relevant.  This mirrors
     the memory injection pattern used by ``execute_prompt``.
 
+    Web search is forwarded from ``cfg.websearch`` and
+    ``cfg.websearch_max_results`` to ``prompt_claude()``, allowing Claude
+    to search the web during source list generation when enabled.
+
     Parameters
     ----------
     cfg : Config
         Resolved configuration (API key, model, system prompt, memory
-        settings, etc.).
+        settings, websearch settings, etc.).
     prompt : str
         The user prompt — Claude uses it to decide which files are relevant
         (its instructions are NOT executed).
@@ -102,6 +109,10 @@ def generate_source(
               f"LT={memory_result.long_term_tokens} ST={memory_result.short_term_tokens} "
               f"Git={memory_result.git_history_tokens})")
 
+    # Log websearch status for this specific tool invocation
+    if cfg.websearch:
+        print(f"[tool_source_generate] Web search: ENABLED (max_results={cfg.websearch_max_results})")
+
     # ── Build the gen-source message ─────────────────────────────────────────
     message_content = generate_prompt_for_gen_source(prompt, example_source, tree_str)
 
@@ -137,6 +148,9 @@ def generate_source(
     print("\n[tool_source_generate] Asking Claude for relevant source list...")
 
     # ── Call Claude ──────────────────────────────────────────────────────────
+    # websearch and websearch_max_results are forwarded from cfg so that
+    # Claude can perform web searches when enabled — applies uniformly to
+    # all tool invocations within any workflow.
     result = prompt_claude(
         api_key=cfg.anthropic_api_key,
         model=cfg.anthropic_model,

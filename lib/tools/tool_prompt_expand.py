@@ -5,6 +5,9 @@ Public API:
     expand_prompt(cfg, minimal_prompt, source_paths) -> dict
         Send a meta-prompt to Claude asking it to expand a minimal user prompt
         into a comprehensive implementation specification.
+
+        Web search is forwarded from ``cfg.websearch`` to ``prompt_claude()``
+        so Claude can search the web when enabled in the configuration.
 """
 
 import os
@@ -36,6 +39,10 @@ def expand_prompt(
     meta-prompt instructing it to produce a comprehensive specification WITHOUT
     implementing any code.  The expanded prompt is returned in a
     ``{'+'*5} ./expanded-prompt.md [EDIT]`` block.
+
+    Web search is forwarded from ``cfg.websearch`` and
+    ``cfg.websearch_max_results`` to ``prompt_claude()``, allowing Claude
+    to search the web during prompt expansion when enabled.
 
     Parameters
     ----------
@@ -90,6 +97,10 @@ def expand_prompt(
     memory_result = build_memory_block(cfg, include_short_term=False)
     memory_block = memory_result.text
 
+    # Log websearch status for this specific tool invocation
+    if cfg.websearch:
+        print(f"[tool_prompt_expand] Web search: ENABLED (max_results={cfg.websearch_max_results})")
+
     # ── 3. Build the expand meta-prompt ──────────────────────────────────────
     meta_prompt = build_expand_meta_prompt(minimal_prompt)
 
@@ -114,6 +125,9 @@ def expand_prompt(
     )
 
     # ── 5. Call Claude ───────────────────────────────────────────────────────
+    # websearch and websearch_max_results are forwarded from cfg so that
+    # Claude can perform web searches when enabled — applies uniformly to
+    # all tool invocations within any workflow.
     print("[tool_prompt_expand] Asking Claude to expand the prompt...")
     result = prompt_claude(
         api_key=cfg.anthropic_api_key,

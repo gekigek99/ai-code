@@ -34,6 +34,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "  python ai-code.py -ai -f          Same, but skip uncommitted-git check\n"
             "  python ai-code.py -ai -pdf        Include PDF files in AI context\n"
             "  python ai-code.py -ai -img a.png  Attach image(s) to the prompt\n"
+            "  python ai-code.py -ai -websearch  Enable web search for this run\n"
             "  python ai-code.py -last            Re-apply last saved Claude response\n"
             "  python ai-code.py -gen-source      Ask Claude to generate a source list\n"
             "  python ai-code.py -ai-steps        Run multi-step automated workflow\n"
@@ -122,6 +123,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "context.  Text is extracted from PDFs via PyMuPDF and sent as "
             "plain text.  Without this flag, PDF files are discovered but "
             "not shared with the model."
+        ),
+    )
+
+    parser.add_argument(
+        "-websearch",
+        action="store_true",
+        dest="enable_websearch",
+        help=(
+            "Enable web search for this run, overriding the YAML config "
+            "WEBSEARCH setting.  When active, Claude can perform web "
+            "searches to find relevant documentation, API references, "
+            "and implementation patterns.  Applies to all API calls in "
+            "the chosen workflow (ai, ai-steps, gen-source)."
         ),
     )
 

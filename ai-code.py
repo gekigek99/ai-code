@@ -10,6 +10,7 @@ Usage:
     python ai-code.py                 # dry run (gather + export prompt)
     python ai-code.py -ai             # send to Claude and apply edits
     python ai-code.py -ai -f          # skip uncommitted-git check
+    python ai-code.py -ai -websearch  # enable web search for this run
     python ai-code.py -last           # re-apply last saved response
     python ai-code.py -gen-source     # ask Claude for a source list
     python ai-code.py -ai-steps       # multi-step automated workflow
@@ -67,6 +68,14 @@ def main() -> None:
     # ── 2. Load configuration ────────────────────────────────────────────────
     script_dir = os.path.dirname(os.path.abspath(__file__))
     cfg = load_config(script_dir)
+
+    # ── 2.1 Apply CLI overrides to config ────────────────────────────────────
+    # The -websearch CLI flag overrides the YAML WEBSEARCH setting.
+    # This allows enabling websearch for a single run without editing
+    # the config file, or force-enabling it when the config has it off.
+    if args.enable_websearch:
+        cfg.websearch = True
+        print("[config] Web search enabled via -websearch CLI flag")
 
     # ── 3. Handle -last: re-apply saved response ────────────────────────────
     # This is a simple offline flow — no API call, no workflow needed.
@@ -156,6 +165,12 @@ def main() -> None:
         cfg.logs_dir,
     )
     export_md_file(str(message_content), "message_content.md", cfg.claude_output_dir)
+
+    # Show websearch status in dry run output so users know what would happen
+    if cfg.websearch:
+        print(f"\n[websearch] Web search is ENABLED (max_results={cfg.websearch_max_results})")
+    else:
+        print("\n[websearch] Web search is DISABLED (enable via YAML config or -websearch flag)")
 
     print("Not executing AI request (dry run). Use -ai, -ai-steps, or -gen-source to execute.")
 

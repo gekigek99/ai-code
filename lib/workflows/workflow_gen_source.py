@@ -13,7 +13,7 @@ from lib.config import Config
 from lib.files import add_source
 from lib.tree import get_directory_tree
 from lib.tools.tool_source_generate import generate_source
-from lib.utils import warn
+from lib.utils import warn, COLOR_CYAN, COLOR_RESET
 
 
 def run_gen_source_workflow(cfg: Config, args: Namespace) -> None:
@@ -32,6 +32,13 @@ def run_gen_source_workflow(cfg: Config, args: Namespace) -> None:
     args : Namespace
         Parsed CLI arguments.
     """
+    # ── Show workflow configuration ──────────────────────────────────────────
+    print(f"\n{COLOR_CYAN}{'=' * 60}")
+    print(f"  GEN-SOURCE WORKFLOW")
+    print(f"  Model: {cfg.anthropic_model}")
+    print(f"  Web search: {'ENABLED (max_results=' + str(cfg.websearch_max_results) + ')' if cfg.websearch else 'DISABLED'}")
+    print(f"{'=' * 60}{COLOR_RESET}\n")
+
     print("Generating adapted-to-prompt source via Claude...")
 
     # ── 1. Build the directory tree for context ──────────────────────────────
