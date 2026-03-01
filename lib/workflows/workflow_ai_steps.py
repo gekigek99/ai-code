@@ -17,9 +17,10 @@ Public API:
         when all steps have been processed (completed or skipped), and
         persists on disk across ``-continue`` resumes and user quits.
 
-        Long-term memory is updated via source scanning before each step
-        execution (``scan_source_to_memory=True``), ensuring the memory
-        map always reflects the current codebase state as it evolves.
+        Long-term memory is updated inline during each step execution —
+        Claude outputs an updated ``memory/long-term.md`` block alongside
+        code blocks, so the memory always reflects the current codebase
+        state without separate API calls.
 
 Commit message format:
     feature_title: category: ai-step X/Y - step_title
@@ -287,9 +288,12 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
     (completed or skipped), and persists across ``-continue`` resumes
     and user quits so the next session can pick up context.
 
-    Long-term memory is updated via source scanning before each step
-    execution (``scan_source_to_memory=True``), so the memory map always
-    reflects the current codebase state as it evolves across steps.
+    Long-term memory is updated inline during each step execution —
+    Claude outputs a ``memory/long-term.md`` block alongside code blocks.
+    This is handled by ``execute_prompt`` via
+    ``build_memory_update_instructions`` and
+    ``extract_and_save_memory_from_response``, so the memory always
+    reflects the current codebase state without separate API calls.
 
     When ``args.continue_steps`` is True, the workflow resumes from the
     last saved checkpoint — skipping already-completed phases and steps.
@@ -646,10 +650,9 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
             )
 
             print(f"\n{prefix} Executing step...")
-            # scan_source_to_memory=True triggers a pre-execution memory
-            # update: after reading source files, their previews are sent to
-            # Claude to refresh the codebase map in long-term.md.  This ensures
-            # the memory accurately reflects changes from previous steps.
+            # Memory updates happen inline: execute_prompt appends memory
+            # update instructions to the prompt and extracts the memory block
+            # from the response.  No separate API calls needed.
             exec_result = execute_prompt(
                 cfg=cfg,
                 prompt=current_prompt,
@@ -658,7 +661,6 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
                 output_dir=step_dir,
                 label=f"attempt-{retry_count}-",
                 include_short_term_memory=True,
-                scan_source_to_memory=True,
             )
 
             if exec_result["status"] != "ok":
