@@ -167,6 +167,10 @@ def build_expand_meta_prompt(minimal_prompt: str) -> str:
     specification WITHOUT implementing any code.  The result should be
     written to a {'+'*5} ./expanded-prompt.md [EDIT]`` block.
 
+    If memory update instructions are appended to this prompt (by the
+    calling tool), Claude will also output a memory file block — this is
+    explicitly allowed alongside the expanded-prompt.md block.
+
     Parameters
     ----------
     minimal_prompt : str
@@ -213,7 +217,8 @@ OUTPUT FORMAT: Write your complete expanded specification inside a single file b
 <your comprehensive specification here>
 {_marker()}
 
-Do not include any other file blocks. Only the expanded-prompt.md block."""
+Do not include any other code or project file blocks — only the expanded-prompt.md block
+(and the memory file block if memory update instructions are included below)."""
 
 
 def build_stepize_meta_prompt(expanded_prompt: str) -> str:
@@ -221,6 +226,10 @@ def build_stepize_meta_prompt(expanded_prompt: str) -> str:
 
     The meta-prompt tells Claude to produce ordered, atomic implementation
     steps in YAML format inside a ``{'+'*5} ./steps.yaml [EDIT]`` block.
+
+    If memory update instructions are appended to this prompt (by the
+    calling tool), Claude will also output a memory file block — this is
+    explicitly allowed alongside the steps.yaml block.
 
     The YAML output includes:
       - ``feature_title``: a short label for the overall feature being built
@@ -301,7 +310,8 @@ steps:
       - ...
 {_marker()}
 
-Do not include any other file blocks. Only the steps.yaml block."""
+Do not include any other code or project file blocks — only the steps.yaml block
+(and the memory file block if memory update instructions are included below)."""
 
 
 def _marker() -> str:

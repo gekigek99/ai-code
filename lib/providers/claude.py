@@ -213,7 +213,16 @@ def _handle_streaming(
     api_kwargs: Dict[str, Any],
     recv_path: Optional[str],
 ) -> Dict[str, Any]:
-    """Handle a streaming API call with real-time chunk output."""
+    """Handle a streaming API call with real-time chunk output.
+
+    Properly handles all Anthropic streaming event types including:
+    - text_delta: regular text output
+    - thinking_delta: extended thinking content
+    - input_json_delta: tool input streaming (e.g. web search query)
+    - citations_delta: web search citation references
+    - content_block_start with server_tool_use: tool invocation start
+    - content_block_start with web_search_tool_result: search results
+    """
     try:
         response_iter = client.messages.create(**api_kwargs, stream=True)
     except Exception as e:
@@ -264,78 +273,102 @@ def _handle_streaming(
                             except Exception as e:
                                 print(f"[warn] Failed to append to recv file: {e}")
 
+                    elif d_type == "input_json_delta":
+                        # Tool input being streamed (e.g. the web search query).
+                        # Print it so the user can see what Claude is searching for.
+                        partial = getattr(delta, "partial_json", "") or ""
+                        if partial:
+                            print(partial, end="", flush=True)
+
                     elif d_type == "citations_delta":
-                        citation_obj = getattr(delta, "citation", None)
-                        citation_list = (
-                            citation_obj if isinstance(citation_obj, (list, tuple))
-                            else [citation_obj] if citation_obj is not None
-                            else []
-                        )
-                        for cit in citation_list:
-                            try:
-                                _print_websearch_entry({
-                                    "title": getattr(cit, "title", "") or "",
-                                    "url": getattr(cit, "url", "") or "",
-                                    "citation_text": getattr(cit, "cited_text", "") or "",
-                                    "page_age": getattr(cit, "page_age", None),
-                                    "source": "citation_delta",
-                                })
-                            except Exception as e:
-                                print(f"[debug] Failed to parse citation delta: {e}")
+                        # Web search citation — a single citation object per delta
+                        # event with url, title, cited_text, etc.  These appear
+                        # inline as Claude writes text that references search results.
+                        citation = getattr(delta, "citation", None)
+                        if citation is not None:
+                            _print_websearch_citation({
+                                "title": getattr(citation, "title", "") or "",
+                                "url": getattr(citation, "url", "") or "",
+                                "cited_text": getattr(citation, "cited_text", "") or "",
+                                "page_age": getattr(citation, "page_age", None),
+                            })
 
                     else:
-                        print(f"\n[debug] Unhandled content_block_delta subtype: {d_type}")
+                        # Capture unhandled delta subtypes for debugging but don't
+                        # spam stdout — they may be SDK additions we don't know yet.
+                        pass
 
                 elif event.type == "content_block_start":
                     cb = getattr(event, "content_block", None)
-                    content_items = (
-                        getattr(cb, "content", None)
-                        or getattr(cb, "results", None)
-                        or getattr(cb, "content_items", None)
-                    )
-                    if isinstance(content_items, (list, tuple)):
-                        for idx, item in enumerate(content_items):
-                            try:
-                                _print_websearch_entry({
-                                    "title": getattr(item, "title", ""),
-                                    "url": getattr(item, "url", ""),
-                                    "citation_text": (
-                                        getattr(item, "snippet", "")
-                                        or getattr(item, "excerpt", "")
-                                        or getattr(item, "cited_text", "")
-                                        or ""
-                                    ),
-                                    "page_age": getattr(item, "page_age", None),
-                                    "source": "web_search_result",
-                                    "result_index": idx,
-                                })
-                            except Exception as e:
-                                print(f"[debug] Failed to parse web_search result item: {e}")
+                    if cb is None:
+                        continue
+
+                    cb_type = getattr(cb, "type", None)
+
+                    if cb_type == "server_tool_use":
+                        # Claude is invoking a server-side tool (web search).
+                        # Log the tool name so the user sees the search happening.
+                        tool_name = getattr(cb, "name", "unknown_tool")
+                        tool_id = getattr(cb, "id", "")
+                        print(f"\n{'─' * 40}")
+                        print(f"[WEBSEARCH] Claude invoking tool: {tool_name} (id={tool_id})")
+                        print(f"{'─' * 40}")
+
+                    elif cb_type == "web_search_tool_result":
+                        # Server-side web search results.  The content attribute
+                        # is a list of result objects.  Each has type, url, title,
+                        # encrypted_content, and optionally page_age.  The actual
+                        # readable cited text comes later via citations_delta —
+                        # here we log the URLs/titles for visibility.
+                        content_items = getattr(cb, "content", None) or []
+                        if isinstance(content_items, (list, tuple)):
+                            result_count = len(content_items)
+                            print(f"\n{'─' * 40}")
+                            print(f"[WEBSEARCH] Search returned {result_count} result(s):")
+                            for idx, item in enumerate(content_items):
+                                item_type = getattr(item, "type", "")
+
+                                if item_type == "web_search_result":
+                                    title = getattr(item, "title", "") or "(no title)"
+                                    url = getattr(item, "url", "") or "(no url)"
+                                    page_age = getattr(item, "page_age", None)
+                                    age_str = f" | age: {page_age}" if page_age else ""
+                                    print(f"  [{idx + 1}] {title}")
+                                    print(f"      {url}{age_str}")
+
+                                elif item_type == "web_search_result_error":
+                                    error_msg = getattr(item, "error_message", "Unknown search error")
+                                    print(f"  [{idx + 1}] ERROR: {error_msg}")
+
+                                else:
+                                    # Unknown result item type — log for debugging
+                                    print(f"  [{idx + 1}] Unknown type: {item_type}")
+
+                            print(f"{'─' * 40}\n")
+                        else:
+                            print(f"\n[WEBSEARCH] Result block received (non-list content: {type(content_items).__name__})")
+
+                    elif cb_type == "text":
+                        # Regular text content block starting — no action needed.
+                        # Text content arrives via text_delta events.
+                        pass
+
+                    elif cb_type == "thinking":
+                        # Thinking block starting — the actual content arrives
+                        # via thinking_delta events.
+                        print("\n[Claude is thinking...]")
+
                     else:
-                        try:
-                            title = getattr(cb, "title", "") or ""
-                            url = getattr(cb, "url", "") or ""
-                            snippet = getattr(cb, "snippet", "") or ""
-                            page_age = getattr(cb, "page_age", None)
-                            if any([title, url, snippet, page_age]):
-                                _print_websearch_entry({
-                                    "title": title,
-                                    "url": url,
-                                    "citation_text": snippet,
-                                    "page_age": page_age,
-                                    "source": "web_search_result_unstructured",
-                                })
-                        except Exception:
-                            print("\n[debug] Unhandled content_block_start structure")
+                        # Unknown content block type — capture for debugging.
+                        # Could be a new SDK type we haven't handled yet.
+                        pass
 
                 elif event.type == "message_stop":
                     break
 
-                elif event.type == "thinking_block_start":
-                    print("\n[Claude is thinking...]")
-
                 else:
-                    # Ignore unhandled event types silently
+                    # Ignore other event types silently (message_start,
+                    # content_block_stop, message_delta, ping, etc.)
                     pass
 
             except AttributeError as e:
@@ -365,15 +398,27 @@ def _handle_streaming(
     }
 
 
-def _print_websearch_entry(entry: Dict[str, Any]) -> None:
-    """Pretty-print a web-search result entry to stdout."""
-    print("\n--- WEBSEARCH HIT ---")
-    print(f"Title       : {entry.get('title') or '(title not found)'}")
-    print(f"URL         : {entry.get('url') or '(no url)'}")
-    print(f"Citation    : {entry.get('citation_text') or entry.get('cited_text') or '(citation text not found)'}")
-    print(f"Page age    : {entry.get('page_age') or '(page age not found)'}")
-    print(f"Source      : {entry.get('source') or '(source unknown)'}")
-    idx = entry.get("result_index")
-    if idx is not None:
-        print(f"[result ID {idx}]")
-    print("---------------------\n")
+def _print_websearch_citation(entry: Dict[str, Any]) -> None:
+    """Pretty-print a web-search citation that appears inline in Claude's text.
+
+    Citations are emitted via citations_delta events as Claude writes text
+    that references web search results.  Each citation links a span of
+    Claude's output to a specific source URL and quoted text.
+    """
+    title = entry.get("title") or "(no title)"
+    url = entry.get("url") or "(no url)"
+    cited_text = entry.get("cited_text") or ""
+    page_age = entry.get("page_age")
+
+    # Truncate long cited text for readability in terminal
+    if len(cited_text) > 200:
+        cited_text = cited_text[:200] + "..."
+
+    print(f"\n  ╭─ CITATION ─────────────────────────")
+    print(f"  │ Title : {title}")
+    print(f"  │ URL   : {url}")
+    if cited_text:
+        print(f"  │ Text  : {cited_text}")
+    if page_age:
+        print(f"  │ Age   : {page_age}")
+    print(f"  ╰─────────────────────────────────────\n")

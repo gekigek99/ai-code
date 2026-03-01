@@ -6,6 +6,12 @@ Public API:
         Send a meta-prompt to Claude asking it to expand a minimal user prompt
         into a comprehensive implementation specification.
 
+        Memory is updated inline: when ``cfg.memory_auto_update`` is True,
+        Claude outputs an updated ``.ai-code/memory/long-term.md`` block
+        alongside the expanded-prompt.md block.  This ensures memory is
+        kept current whenever Claude reads project files, even during
+        non-code-writing phases like prompt expansion.
+
         Web search is forwarded from ``cfg.websearch`` to ``prompt_claude()``
         so Claude can search the web when enabled in the configuration.
 """
@@ -15,7 +21,11 @@ from typing import Any, Dict, List, Optional
 
 from lib.config import Config
 from lib.files import FileData, add_source
-from lib.memory import build_memory_block
+from lib.memory import (
+    build_memory_block,
+    build_memory_update_instructions,
+    extract_and_save_memory_from_response,
+)
 from lib.token_tracker import compute_and_display_breakdown
 from lib.tree import get_directory_tree
 from lib.prompt_builder import build_message_content, build_expand_meta_prompt
@@ -39,6 +49,13 @@ def expand_prompt(
     meta-prompt instructing it to produce a comprehensive specification WITHOUT
     implementing any code.  The expanded prompt is returned in a
     ``{'+'*5} ./expanded-prompt.md [EDIT]`` block.
+
+    When ``cfg.memory_auto_update`` is True, inline memory update instructions
+    are appended to the meta-prompt so Claude also outputs an updated
+    ``.ai-code/memory/long-term.md`` block.  This ensures the project memory
+    is refreshed whenever Claude reads source files — not just during code
+    execution phases.  The memory block is extracted and saved to disk, then
+    stripped from the response before extracting the expanded prompt.
 
     Web search is forwarded from ``cfg.websearch`` and
     ``cfg.websearch_max_results`` to ``prompt_claude()``, allowing Claude
@@ -92,10 +109,17 @@ def expand_prompt(
     # During expand (Phase 1) no workflow has started yet so short-term memory
     # does not exist.  Long-term memory gives Claude project-wide awareness
     # (architecture, conventions, schema) which improves expansion quality.
-    # Memory updates are NOT triggered here — only execute_prompt() may update
-    # memory after actual code changes are applied to disk.
     memory_result = build_memory_block(cfg, include_short_term=False)
     memory_block = memory_result.text
+
+    # ── 2c. Build inline memory update instructions ──────────────────────────
+    # Appended to the meta-prompt so Claude outputs an updated memory file
+    # block alongside the expanded-prompt.md block.  This keeps the project
+    # memory current whenever Claude reads source files — even during
+    # non-code-writing phases like prompt expansion.
+    memory_instructions = build_memory_update_instructions(cfg)
+    if memory_instructions:
+        print(f"[tool_prompt_expand] Inline memory update instructions appended ({len(memory_instructions)} chars)")
 
     # Log websearch status for this specific tool invocation
     if cfg.websearch:
@@ -104,16 +128,22 @@ def expand_prompt(
     # ── 3. Build the expand meta-prompt ──────────────────────────────────────
     meta_prompt = build_expand_meta_prompt(minimal_prompt)
 
+    # Append memory update instructions to the meta-prompt so they are part
+    # of the prompt Claude sees.  The expand meta-prompt explicitly allows
+    # the memory file block alongside the expanded-prompt.md block.
+    full_meta_prompt = meta_prompt + memory_instructions if memory_instructions else meta_prompt
+
     # ── 4. Build message content using source files + meta-prompt ────────────
     # memory_block is prepended as the first content item so Claude sees
     # project context before source files and the meta-prompt.
     message_content, _ = build_message_content(
-        files_to_ai, meta_prompt, ai_file_listing, memory_block=memory_block,
+        files_to_ai, full_meta_prompt, ai_file_listing, memory_block=memory_block,
     )
 
     # ── Display token breakdown ──────────────────────────────────────────────
     # user_prompt = minimal_prompt (the semantic user request)
     # tool_context = meta_prompt wrapper instructions (total meta minus embedded prompt)
+    # memory_instructions tracked separately for accurate breakdown
     tool_context_chars = max(0, len(meta_prompt) - len(minimal_prompt))
     compute_and_display_breakdown(
         system=cfg.system,
@@ -122,6 +152,7 @@ def expand_prompt(
         ai_file_listing=ai_file_listing,
         user_prompt=minimal_prompt,
         tool_context_chars=tool_context_chars,
+        memory_instructions=memory_instructions,
     )
 
     # ── 5. Call Claude ───────────────────────────────────────────────────────
@@ -171,6 +202,13 @@ def expand_prompt(
             for item in result["raw_data"]
         )
         export_md_file(raw_data_str, "expand-rawdata.md", output_dir)
+
+    # ── 7b. Extract and save memory from response ────────────────────────────
+    # Parse the .ai-code/memory/long-term.md block from the response, save it
+    # to cfg.memory_long_term_dir, and strip it from the response before
+    # extracting the expanded-prompt block.  This ensures the memory file
+    # doesn't interfere with tool-specific block extraction.
+    data_response = extract_and_save_memory_from_response(cfg, data_response)
 
     # ── 8. Extract expanded prompt from response block ───────────────────────
     expanded_prompt = ""
