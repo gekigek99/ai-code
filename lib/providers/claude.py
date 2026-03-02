@@ -11,6 +11,7 @@ All Anthropic SDK imports are isolated here, making it straightforward to
 add alternative providers (OpenAI, Gemini, etc.) as sibling modules.
 """
 
+import json
 import os
 from typing import Any, Dict, List, Optional
 
@@ -222,6 +223,16 @@ def _handle_streaming(
     - citations_delta: web search citation references
     - content_block_start with server_tool_use: tool invocation start
     - content_block_start with web_search_tool_result: search results
+    - content_block_stop: tool input completion (triggers query display)
+
+    Web search activity logging:
+    - Tool invocations are announced when a server_tool_use block starts.
+    - Search queries are accumulated from input_json_delta events and
+      displayed cleanly when the content block completes (content_block_stop),
+      instead of printing raw partial JSON fragments.
+    - Search results (URLs, titles, page ages) are logged as they arrive.
+    - Inline citations are displayed as Claude references search results
+      in its text output.
     """
     try:
         response_iter = client.messages.create(**api_kwargs, stream=True)
@@ -237,6 +248,20 @@ def _handle_streaming(
     data_response = ""
     thinking_content = ""
     raw_data: List[Dict[str, Any]] = []
+
+    # ── Web search activity tracking ─────────────────────────────────────────
+    # Track active tool-use content blocks by their stream index so we can
+    # accumulate input_json_delta fragments and display the complete search
+    # query when the block finishes (content_block_stop), rather than
+    # printing unreadable partial JSON chunks as they arrive.
+    #
+    # Maps: content_block_index -> {"name": tool_name, "input_json": accumulated_str}
+    active_tool_blocks: Dict[int, Dict[str, str]] = {}
+
+    # Running counters for the websearch summary printed at the end
+    ws_searches_performed = 0
+    ws_results_received = 0
+    ws_citations_used = 0
 
     try:
         for event in response_iter:
@@ -274,16 +299,21 @@ def _handle_streaming(
                                 print(f"[warn] Failed to append to recv file: {e}")
 
                     elif d_type == "input_json_delta":
-                        # Tool input being streamed (e.g. the web search query).
-                        # Print it so the user can see what Claude is searching for.
+                        # Accumulate tool input JSON fragments silently.
+                        # The complete query is displayed on content_block_stop
+                        # for a clean, readable output instead of raw JSON chunks.
+                        block_index = getattr(event, "index", None)
                         partial = getattr(delta, "partial_json", "") or ""
-                        if partial:
-                            print(partial, end="", flush=True)
+                        if block_index is not None and block_index in active_tool_blocks:
+                            active_tool_blocks[block_index]["input_json"] += partial
+                        # Intentionally NOT printing raw partial JSON here —
+                        # it produces unreadable fragments like {"qu, ery":, etc.
 
                     elif d_type == "citations_delta":
                         # Web search citation — a single citation object per delta
                         # event with url, title, cited_text, etc.  These appear
                         # inline as Claude writes text that references search results.
+                        ws_citations_used += 1
                         citation = getattr(delta, "citation", None)
                         if citation is not None:
                             _print_websearch_citation({
@@ -304,15 +334,25 @@ def _handle_streaming(
                         continue
 
                     cb_type = getattr(cb, "type", None)
+                    block_index = getattr(event, "index", None)
 
                     if cb_type == "server_tool_use":
                         # Claude is invoking a server-side tool (web search).
-                        # Log the tool name so the user sees the search happening.
+                        # Register this block for input accumulation and log
+                        # the invocation so the user sees the search happening.
                         tool_name = getattr(cb, "name", "unknown_tool")
                         tool_id = getattr(cb, "id", "")
-                        print(f"\n{'─' * 40}")
-                        print(f"[WEBSEARCH] Claude invoking tool: {tool_name} (id={tool_id})")
-                        print(f"{'─' * 40}")
+                        ws_searches_performed += 1
+
+                        if block_index is not None:
+                            active_tool_blocks[block_index] = {
+                                "name": tool_name,
+                                "input_json": "",
+                            }
+
+                        print(f"\n\033[36m{'─' * 50}\033[0m")
+                        print(f"\033[36m[WEBSEARCH #{ws_searches_performed}] "
+                              f"Claude invoking tool: {tool_name} (id={tool_id})\033[0m")
 
                     elif cb_type == "web_search_tool_result":
                         # Server-side web search results.  The content attribute
@@ -323,8 +363,12 @@ def _handle_streaming(
                         content_items = getattr(cb, "content", None) or []
                         if isinstance(content_items, (list, tuple)):
                             result_count = len(content_items)
-                            print(f"\n{'─' * 40}")
-                            print(f"[WEBSEARCH] Search returned {result_count} result(s):")
+                            ws_results_received += result_count
+
+                            print(f"\n\033[36m{'─' * 50}\033[0m")
+                            print(f"\033[36m[WEBSEARCH] Search returned "
+                                  f"{result_count} result(s):\033[0m")
+
                             for idx, item in enumerate(content_items):
                                 item_type = getattr(item, "type", "")
 
@@ -333,20 +377,22 @@ def _handle_streaming(
                                     url = getattr(item, "url", "") or "(no url)"
                                     page_age = getattr(item, "page_age", None)
                                     age_str = f" | age: {page_age}" if page_age else ""
-                                    print(f"  [{idx + 1}] {title}")
-                                    print(f"      {url}{age_str}")
+                                    print(f"\033[36m  [{idx + 1}] {title}\033[0m")
+                                    print(f"\033[36m      {url}{age_str}\033[0m")
 
                                 elif item_type == "web_search_result_error":
                                     error_msg = getattr(item, "error_message", "Unknown search error")
-                                    print(f"  [{idx + 1}] ERROR: {error_msg}")
+                                    print(f"\033[33m  [{idx + 1}] ERROR: {error_msg}\033[0m")
 
                                 else:
                                     # Unknown result item type — log for debugging
-                                    print(f"  [{idx + 1}] Unknown type: {item_type}")
+                                    print(f"\033[33m  [{idx + 1}] Unknown type: "
+                                          f"{item_type}\033[0m")
 
-                            print(f"{'─' * 40}\n")
+                            print(f"\033[36m{'─' * 50}\033[0m\n")
                         else:
-                            print(f"\n[WEBSEARCH] Result block received (non-list content: {type(content_items).__name__})")
+                            print(f"\n\033[33m[WEBSEARCH] Result block received "
+                                  f"(non-list content: {type(content_items).__name__})\033[0m")
 
                     elif cb_type == "text":
                         # Regular text content block starting — no action needed.
@@ -363,12 +409,38 @@ def _handle_streaming(
                         # Could be a new SDK type we haven't handled yet.
                         pass
 
+                elif event.type == "content_block_stop":
+                    # A content block has finished.  If it was a tool-use block
+                    # (tracked in active_tool_blocks), parse the accumulated
+                    # input JSON to extract and display the search query cleanly.
+                    block_index = getattr(event, "index", None)
+                    if block_index is not None and block_index in active_tool_blocks:
+                        tool_info = active_tool_blocks.pop(block_index)
+                        accumulated = tool_info["input_json"]
+                        tool_name = tool_info["name"]
+
+                        # Parse the accumulated JSON to extract the search query.
+                        # For web_search, the input is {"query": "search terms"}.
+                        search_query = ""
+                        if accumulated:
+                            try:
+                                parsed_input = json.loads(accumulated)
+                                search_query = parsed_input.get("query", accumulated)
+                            except (json.JSONDecodeError, ValueError):
+                                # Fallback: show raw accumulated input if JSON parse fails
+                                search_query = accumulated
+
+                        if search_query:
+                            print(f"\033[36m[WEBSEARCH] Search query: "
+                                  f"\033[1m{search_query}\033[0;36m\033[0m")
+                        print(f"\033[36m{'─' * 50}\033[0m")
+
                 elif event.type == "message_stop":
                     break
 
                 else:
                     # Ignore other event types silently (message_start,
-                    # content_block_stop, message_delta, ping, etc.)
+                    # message_delta, ping, etc.)
                     pass
 
             except AttributeError as e:
@@ -386,6 +458,17 @@ def _handle_streaming(
             "thinking_content": thinking_content,
             "raw_data": raw_data,
         }
+
+    # ── Web search summary ───────────────────────────────────────────────────
+    # Print a summary of all web search activity so the user can confirm
+    # that searches actually happened and see the total scope at a glance.
+    if ws_searches_performed > 0:
+        print(f"\n\033[36m{'═' * 50}\033[0m")
+        print(f"\033[36m[WEBSEARCH SUMMARY] "
+              f"Searches: {ws_searches_performed} | "
+              f"Results: {ws_results_received} | "
+              f"Citations used: {ws_citations_used}\033[0m")
+        print(f"\033[36m{'═' * 50}\033[0m\n")
 
     status = "ok" if data_response.strip() else "no_response"
 
@@ -414,11 +497,11 @@ def _print_websearch_citation(entry: Dict[str, Any]) -> None:
     if len(cited_text) > 200:
         cited_text = cited_text[:200] + "..."
 
-    print(f"\n  ╭─ CITATION ─────────────────────────")
-    print(f"  │ Title : {title}")
-    print(f"  │ URL   : {url}")
+    print(f"\n\033[36m  ╭─ CITATION ─────────────────────────\033[0m")
+    print(f"\033[36m  │ Title : {title}\033[0m")
+    print(f"\033[36m  │ URL   : {url}\033[0m")
     if cited_text:
-        print(f"  │ Text  : {cited_text}")
+        print(f"\033[36m  │ Text  : {cited_text}\033[0m")
     if page_age:
-        print(f"  │ Age   : {page_age}")
-    print(f"  ╰─────────────────────────────────────\n")
+        print(f"\033[36m  │ Age   : {page_age}\033[0m")
+    print(f"\033[36m  ╰─────────────────────────────────────\033[0m\n")
