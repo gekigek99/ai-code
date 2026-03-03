@@ -34,10 +34,10 @@ def confirm_step(step_number: int, step_title: str) -> dict:
     print(f"\n{'='*60}")
     print(f"  Step {step_number}: {step_title}")
     print(f"{'='*60}")
-    print("  [y] Accept and continue")
-    print("  [r] Retry with modifications")
-    print("  [s] Skip this step (revert changes)")
-    print("  [q] Quit workflow (revert changes)")
+    print("  [ y  ] Accept and continue")
+    print("  [ r  ] Retry with modifications")
+    print("  [skip] Skip this step (revert changes)")
+    print("  [quit] Quit workflow (revert changes)")
     print(f"{'='*60}")
 
     while True:
@@ -48,10 +48,10 @@ def confirm_step(step_number: int, step_title: str) -> dict:
             print("\n[EOF/Interrupt detected — quitting]")
             return {"action": "quit", "modification": None}
 
-        if choice in ("y", "yes"):
+        if choice in ("y"):
             return {"action": "continue", "modification": None}
 
-        elif choice in ("r", "retry"):
+        elif choice in ("r"):
             print("\nEnter modifications to the step prompt (press Enter twice to finish):")
             lines = []
             try:
@@ -72,11 +72,11 @@ def confirm_step(step_number: int, step_title: str) -> dict:
 
             return {"action": "retry", "modification": modification}
 
-        elif choice in ("s", "skip"):
+        elif choice in ("skip"):
             return {"action": "skip", "modification": None}
 
-        elif choice in ("q", "quit"):
+        elif choice in ("quit"):
             return {"action": "quit", "modification": None}
 
         else:
-            print(f"  Invalid choice: '{choice}'. Please enter y, r, s, or q.")
+            print(f"  Invalid choice: '{choice}'. Please enter one of the displayed options.")
