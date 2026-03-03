@@ -35,8 +35,8 @@ Public API:
         informed decisions about which files are relevant.
 
 Commit message format:
-    feature_title: category: ai-step X/Y - step_title
-    e.g. User Preferences: database: ai-step 1/5 - Add preferences table
+    feature_title: ai-step X/Y: category - step_title
+    e.g. User Preferences: ai-step 1/5: database - Add preferences table
 """
 
 import hashlib
@@ -365,8 +365,8 @@ def _format_commit_message(
 ) -> str:
     """Build a structured commit message with category and feature context.
 
-    Format: ``feature_title: category: ai-step X/Y - step_title``
-    e.g.  ``User Preferences: database: ai-step 1/5 - Add preferences table``
+    Format: ``feature_title: ai-step X/Y: category - step_title``
+    e.g.  ``User Preferences: ai-step 1/5: database - Add preferences table``
 
     Parameters
     ----------
@@ -381,7 +381,7 @@ def _format_commit_message(
     feature_title : str
         Overall feature label (e.g. "User Preferences").
     """
-    return f"{feature_title}: {step_category}: ai-step {step_number}/{total_steps} - {step_title}"
+    return f"{feature_title}: ai-step {step_number}/{total_steps}: {step_category} - {step_title}"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -439,9 +439,8 @@ def _websearch_status_str(cfg: Config) -> str:
 def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
     """Execute the ``-ai-steps`` automated multi-step workflow.
 
-    This workflow requires git to be available.  Each accepted step is
-    committed with a structured message:
-    ``feature_title: category: ai-step X/Y - step_title``
+    This workflow requires git to be available. Each accepted step is
+    committed with a structured message
 
     **Artifact retention policy:**  Workflow artifacts (logs, phase
     directories, ``steps.yaml``, ``workflow-state.yaml``, and short-term
