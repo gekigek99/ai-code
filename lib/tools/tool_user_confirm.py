@@ -42,7 +42,7 @@ def confirm_step(step_number: int, step_title: str) -> dict:
 
     while True:
         try:
-            choice = input("\nYour choice [y/r/s/q]: ").strip().lower()
+            choice = input("\nYour choice [y/r/skip/quit]: ").strip().lower()
         except (EOFError, KeyboardInterrupt):
             # Treat EOF / Ctrl+C as quit to avoid hanging
             print("\n[EOF/Interrupt detected — quitting]")
@@ -72,10 +72,10 @@ def confirm_step(step_number: int, step_title: str) -> dict:
 
             return {"action": "retry", "modification": modification}
 
-        elif choice in ("skip"):
+        elif choice == "skip":
             return {"action": "skip", "modification": None}
 
-        elif choice in ("quit"):
+        elif choice == "quit":
             return {"action": "quit", "modification": None}
 
         else:
