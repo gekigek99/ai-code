@@ -11,11 +11,16 @@ Public API:
         Supports ``-continue`` to resume from the last saved checkpoint
         after a crash or connection loss.
 
+        Workflow artifacts (logs, steps.yaml, workflow-state.yaml, short-term
+        memory) are intentionally preserved after workflow completion.  This
+        allows the user to review results at any time.  Cleanup only occurs
+        at the start of the *next* ``-ai-steps`` invocation (without
+        ``-continue``), and only after explicit user confirmation.
+
         Short-term memory is maintained throughout the workflow lifecycle,
         giving Claude context about the overall mission, progress, and
-        current step when executing individual steps.  It is cleared only
-        when all steps have been processed (completed or skipped), and
-        persists on disk across ``-continue`` resumes and user quits.
+        current step when executing individual steps.  It persists on disk
+        after completion and across ``-continue`` resumes and user quits.
         Short-term memory is stored inside the ai-code directory at
         ``<script_dir>/memory/short-term.md``.
 
@@ -36,6 +41,7 @@ Commit message format:
 
 import hashlib
 import os
+import shutil
 import sys
 from argparse import Namespace
 from typing import Any, Dict, List, Optional, Set
@@ -106,6 +112,145 @@ def _load_workflow_state(output_dir: str) -> Optional[Dict[str, Any]]:
     except Exception as e:
         warn(f"[state] Failed to load workflow state: {e}")
         return None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Previous workflow cleanup
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _has_previous_workflow_artifacts(steps_output_dir: str) -> bool:
+    """Return True if the ai-steps output directory contains any artifacts
+    from a previous workflow run (state file, phase dirs, step dirs, etc.).
+
+    An empty or non-existent directory returns False.
+    """
+    if not os.path.isdir(steps_output_dir):
+        return False
+    # Check for any files or subdirectories — any content means a previous run
+    try:
+        return len(os.listdir(steps_output_dir)) > 0
+    except OSError:
+        return False
+
+
+def _describe_previous_workflow(steps_output_dir: str) -> None:
+    """Print a summary of the previous workflow artifacts found on disk.
+
+    Reads the saved state file (if present) to show feature title, step
+    counts, and completion status.  Also lists the artifact directory
+    contents at a high level so the user knows what will be deleted.
+    """
+    state = _load_workflow_state(steps_output_dir)
+
+    print(f"\n{COLOR_YELLOW}{'=' * 60}")
+    print(f"  PREVIOUS WORKFLOW ARTIFACTS DETECTED")
+    print(f"{'=' * 60}{COLOR_RESET}")
+
+    if state:
+        feature = state.get("feature_title", "unknown")
+        completed = state.get("completed_steps", [])
+        skipped = state.get("skipped_steps", [])
+        all_steps = state.get("steps") or []
+        total = len(all_steps)
+        phase = state.get("phase_completed", 0)
+
+        print(f"  Feature:   {feature}")
+        print(f"  Phase:     {phase}/3 completed")
+        if total > 0:
+            print(f"  Steps:     {len(completed)} completed, {len(skipped)} skipped, {total} total")
+            remaining = total - len(completed) - len(skipped)
+            if remaining == 0:
+                print(f"  Status:    FINISHED (all steps processed)")
+            else:
+                print(f"  Status:    INCOMPLETE ({remaining} steps remaining)")
+        print()
+
+    # List top-level contents of the artifact directory
+    try:
+        entries = sorted(os.listdir(steps_output_dir))
+        if entries:
+            print(f"  Artifact directory: {steps_output_dir}")
+            print(f"  Contents:")
+            for entry in entries:
+                entry_path = os.path.join(steps_output_dir, entry)
+                if os.path.isdir(entry_path):
+                    # Count files inside subdirectory for context
+                    file_count = sum(len(files) for _, _, files in os.walk(entry_path))
+                    print(f"    📁 {entry}/ ({file_count} file{'s' if file_count != 1 else ''})")
+                else:
+                    print(f"    📄 {entry}")
+            print()
+    except OSError:
+        pass
+
+    print(f"  Starting a new workflow will {COLOR_YELLOW}DELETE{COLOR_RESET} all listed artifacts.")
+    print(f"  Use {COLOR_CYAN}-ai-steps -continue{COLOR_RESET} to resume the previous workflow instead.")
+    print(f"{'=' * 60}")
+
+
+def _confirm_and_cleanup_previous_workflow(
+    steps_output_dir: str,
+    memory_short_term_dir: str,
+) -> bool:
+    """Check for previous workflow artifacts, ask user to confirm deletion.
+
+    Called at the start of a fresh (non-continue) ``-ai-steps`` run.  If
+    previous artifacts exist, the user is shown a summary and asked to
+    confirm deletion.  On confirmation, the entire ai-steps output
+    directory is removed and recreated empty, and short-term memory is
+    cleared.
+
+    Parameters
+    ----------
+    steps_output_dir : str
+        Path to the ai-steps output directory (``logs/claude/ai-steps/``).
+    memory_short_term_dir : str
+        Path to the short-term memory directory (``<script_dir>/memory/``).
+
+    Returns
+    -------
+    bool
+        True if the workflow should proceed (no artifacts found, or user
+        confirmed deletion).  False if the user declined (workflow should
+        abort).
+    """
+    if not _has_previous_workflow_artifacts(steps_output_dir):
+        return True  # Nothing to clean up — proceed immediately
+
+    _describe_previous_workflow(steps_output_dir)
+
+    while True:
+        try:
+            choice = input("\nDelete previous workflow artifacts and start fresh? [y/n]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\n[EOF/Interrupt — aborting]")
+            return False
+
+        if choice == "y":
+            # Remove entire ai-steps output directory and recreate empty
+            try:
+                shutil.rmtree(steps_output_dir)
+                print(f"[cleanup] Deleted: {steps_output_dir}")
+            except Exception as e:
+                warn(f"[cleanup] Failed to delete artifact directory: {e}")
+                print("Please remove the directory manually and retry.")
+                return False
+
+            os.makedirs(steps_output_dir, exist_ok=True)
+
+            # Clear short-term memory — it belongs to the old workflow
+            clear_short_term_memory(memory_short_term_dir)
+            print("[cleanup] Short-term memory cleared.")
+
+            print("[cleanup] Previous workflow artifacts deleted. Starting fresh.\n")
+            return True
+
+        elif choice == "n":
+            print(f"\n[ai-steps] Aborting. Use {COLOR_CYAN}-ai-steps -continue{COLOR_RESET} to resume the previous workflow.")
+            return False
+
+        else:
+            print("  Please enter 'y' or 'n'.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -298,13 +443,19 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
     committed with a structured message:
     ``feature_title: category: ai-step X/Y - step_title``
 
+    **Artifact retention policy:**  Workflow artifacts (logs, phase
+    directories, ``steps.yaml``, ``workflow-state.yaml``, and short-term
+    memory) are preserved after workflow completion — both on successful
+    finish and on user quit.  Cleanup only occurs at the beginning of
+    the *next* ``-ai-steps`` invocation (without ``-continue``), after
+    the user explicitly confirms deletion of the previous artifacts.
+    This lets the user review results, debug issues, or resume at any
+    time without losing context.
+
     Short-term memory is updated at each phase transition and before
     each step execution, providing Claude with awareness of the overall
     mission, progress, and current step when executing individual steps.
-    Short-term memory is only cleared when all steps have been processed
-    (completed or skipped), and persists across ``-continue`` resumes
-    and user quits so the next session can pick up context.  Short-term
-    memory is stored at ``<script_dir>/memory/short-term.md``.
+    Short-term memory is stored at ``<script_dir>/memory/short-term.md``.
 
     Long-term memory is updated inline during each step execution —
     Claude outputs a ``.ai-code/long-term.md`` block alongside code blocks.
@@ -344,6 +495,20 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
 
     # Base output directory for all ai-steps artifacts
     steps_output_dir = os.path.join(cfg.claude_output_dir, "ai-steps")
+
+    # ── Previous workflow cleanup (fresh runs only) ──────────────────────────
+    # When starting a fresh workflow (no -continue), check if artifacts from
+    # a previous run exist.  If so, show a summary and ask the user to
+    # confirm deletion before proceeding.  This ensures no accidental data
+    # loss while keeping the workflow directory clean for the new run.
+    if not continue_mode:
+        if _has_previous_workflow_artifacts(steps_output_dir):
+            should_proceed = _confirm_and_cleanup_previous_workflow(
+                steps_output_dir, cfg.memory_short_term_dir,
+            )
+            if not should_proceed:
+                return  # User declined — abort without error
+
     os.makedirs(steps_output_dir, exist_ok=True)
 
     # ── State initialisation ─────────────────────────────────────────────────
@@ -765,6 +930,15 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
                     break
                 elif user_result["action"] == "quit":
                     print(f"\n{prefix} Quitting workflow.")
+                    _save_workflow_state({
+                        "prompt_hash": prompt_hash,
+                        "phase_completed": 2,
+                        "expanded_prompt": expanded_prompt_text,
+                        "feature_title": feature_title,
+                        "steps": steps,
+                        "completed_steps": sorted(completed_steps_set),
+                        "skipped_steps": sorted(skipped_steps_set),
+                    }, steps_output_dir)
                     _print_summary(completed_count, skipped_count, total_steps)
                     log_prompt(cfg.prompt, cfg.logs_dir)
                     return
@@ -868,8 +1042,9 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
                 break
 
             elif user_result["action"] == "quit":
-                # User quit — preserve short-term memory on disk so
-                # -continue can resume with full workflow context intact.
+                # User quit — preserve all artifacts (state, logs, short-term
+                # memory) on disk so -continue can resume with full workflow
+                # context intact.
                 print(f"{prefix} Reverting changes and quitting...")
                 revert_to_last_commit()
                 # Save state so -continue can resume later
@@ -890,17 +1065,18 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
     _print_summary(completed_count, skipped_count, total_steps)
     log_prompt(cfg.prompt, cfg.logs_dir)
 
-    # Clean up state file and short-term memory on successful completion of
-    # all steps.  Short-term memory is only cleared here — NOT on user quit
-    # — so that -continue can resume with full workflow context intact.
+    # ── Artifact retention ───────────────────────────────────────────────────
+    # All workflow artifacts (state file, logs, steps.yaml, short-term memory)
+    # are intentionally preserved after completion.  This allows the user to:
+    #   - Review the full execution history and AI responses
+    #   - Debug issues with specific steps
+    #   - Resume with -continue if steps were skipped
+    #
+    # Cleanup happens at the START of the next -ai-steps invocation (without
+    # -continue), after the user explicitly confirms deletion via
+    # _confirm_and_cleanup_previous_workflow().
     if completed_count + skipped_count >= total_steps:
-        state_path = os.path.join(steps_output_dir, _STATE_FILENAME)
-        if os.path.isfile(state_path):
-            print("[ai-steps] Workflow complete — removing state file.")
-            try:
-                os.remove(state_path)
-            except Exception:
-                pass  # non-critical
-
-        clear_short_term_memory(cfg.memory_short_term_dir)
-        print("[ai-steps] Short-term memory cleared.")
+        print(f"\n{COLOR_GREEN}[ai-steps] Workflow complete.{COLOR_RESET}")
+        print(f"  Artifacts preserved at: {steps_output_dir}")
+        print(f"  Run {COLOR_CYAN}-ai-steps{COLOR_RESET} again to start a new workflow (will prompt to delete these).")
+        print(f"  Run {COLOR_CYAN}-ai-steps -continue{COLOR_RESET} to re-run skipped steps (if any).")
