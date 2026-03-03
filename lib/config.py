@@ -53,6 +53,31 @@ Output only updated, new, or deleted files.
 """.format(marker="+" * 5)
 
 
+def _sanitize_string_list(raw_list) -> List[str]:
+    """Filter a YAML-parsed list to contain only non-empty strings.
+
+    YAML list entries like ``- # comment`` parse as ``None`` because the
+    ``-`` creates a list item and ``# ...`` is a comment (producing no
+    value).  This silently drops such entries plus any other non-string
+    or empty-string entries, preventing downstream ``os.path.abspath(None)``
+    TypeError crashes.
+
+    Parameters
+    ----------
+    raw_list : any
+        The value parsed from YAML.  Expected to be a list but may be
+        None or a non-list type.
+
+    Returns
+    -------
+    list[str]
+        Cleaned list containing only non-empty strings.
+    """
+    if not isinstance(raw_list, list):
+        return []
+    return [str(entry) for entry in raw_list if entry is not None and str(entry).strip()]
+
+
 @dataclass
 class Config:
     """Immutable-ish container for all resolved configuration values.
@@ -129,9 +154,14 @@ def load_config(script_dir: str) -> Config:
 
     # ── Extract top-level keys with safe defaults ────────────────────────────
     anthropic = raw.get("ANTHROPIC", {})
-    source = raw.get("source") or ["."]
-    tree_dirs = raw.get("tree_dirs") or source
-    exclude_patterns = raw.get("exclude_patterns") or []
+
+    # Sanitize all list-type config values to remove None entries that arise
+    # from YAML lines like ``- # comment`` (which parse as None list items).
+    # This prevents TypeError crashes in downstream code that calls
+    # os.path.abspath() or similar on each entry.
+    source = _sanitize_string_list(raw.get("source")) or ["."]
+    tree_dirs = _sanitize_string_list(raw.get("tree_dirs")) or source
+    exclude_patterns = _sanitize_string_list(raw.get("exclude_patterns")) or []
     prompt = raw.get("prompt") or ""
 
     # Always exclude the .ai-code directory from source context — memory files

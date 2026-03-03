@@ -170,6 +170,9 @@ def add_source(
     """Walk *source_paths*, read every non-excluded file, and append FileData
     entries to *files_to_ai*.
 
+    Silently skips any None or non-string entries in *source_paths* — these
+    can arise from YAML list items like ``- # comment`` which parse as None.
+
     Returns
     -------
     (files_to_ai, abs_file_paths) : tuple
@@ -184,6 +187,13 @@ def add_source(
     abs_file_paths: Set[str] = set()
 
     for s in source_paths:
+        # Guard against None or non-string entries in source_paths.
+        # YAML ``- # comment`` lines parse as None list items; other callers
+        # (e.g. stepize step["source"]) may also produce non-string entries.
+        if s is None or not isinstance(s, str) or not s.strip():
+            warn(f"WARNING: Skipping invalid source entry: {s!r}")
+            continue
+
         abs_entry = os.path.abspath(s)
         if not os.path.exists(abs_entry):
             warn(f"WARNING: Source entry not found: {s}")
