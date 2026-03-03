@@ -8,6 +8,10 @@ Public API:
     Build a human-readable tree and a flat file listing suitable for LLM
     context.  The ANSI-coloured version is printed to the console; the
     returned ``clean_tree`` has ANSI codes stripped.
+
+    The ``ai_file_listing`` includes file size (KB) for all files and
+    token estimates for files shared with the LLM, so Claude can gauge
+    the relative size and importance of each file.
 """
 
 import os
@@ -69,7 +73,8 @@ def get_directory_tree(
     (clean_tree, ai_file_listing) : tuple[str, str]
         *clean_tree* — ANSI-free, human-readable tree string.
         *ai_file_listing* — one ``./relative/path`` per line for LLM consumption,
-        with token estimates appended for files included in the AI context.
+        with file size (KB) for all files and token estimates appended for
+        files included in the AI context.
     """
     base_dirs = _resolve_tree_dirs(base_dirs)
 
@@ -79,10 +84,11 @@ def get_directory_tree(
     display_lines: List[str] = []
     clean_lines: List[str] = []
 
-    # Each entry is (relative_path, token_estimate_or_None).
+    # Each entry is (relative_path, token_estimate_or_None, size_kb).
     # token_estimate is populated only for files present in files_to_ai
     # (i.e. files whose content is shared with the LLM).
-    ai_file_entries: List[Tuple[str, Optional[int]]] = []
+    # size_kb is always populated for all discovered files.
+    ai_file_entries: List[Tuple[str, Optional[int], float]] = []
 
     files_to_ai = files_to_ai or []
     files_to_ai_norm = {
@@ -125,17 +131,20 @@ def get_directory_tree(
             filedata = files_to_ai_norm.get(os.path.normcase(os.path.abspath(abs_path)))
 
             if os.path.isfile(abs_path):
-                # Collect relative path and token estimate for AI listing
-                rel_to_root = "./" + os.path.relpath(abs_path, project_root).replace("\\", "/")
-                token_est = None
-                if filedata:
-                    token_est = getattr(filedata, "ai_data_tokens", None)
-                ai_file_entries.append((rel_to_root, token_est))
-
+                # Compute file size (used in both tree display and AI listing)
                 try:
                     size_kb = os.path.getsize(abs_path) / 1024
                 except Exception:
                     size_kb = 0.0
+
+                # Collect relative path, token estimate, and KB for AI listing.
+                # Every discovered file gets its KB size recorded; only files
+                # in files_to_ai get a token estimate.
+                rel_to_root = "./" + os.path.relpath(abs_path, project_root).replace("\\", "/")
+                token_est = None
+                if filedata:
+                    token_est = getattr(filedata, "ai_data_tokens", None)
+                ai_file_entries.append((rel_to_root, token_est, size_kb))
 
                 pad = base_name.ljust(20)[len(base_name):]
 
@@ -201,15 +210,18 @@ def get_directory_tree(
     # Clean tree for export (no ANSI)
     clean_tree = "\n".join(clean_lines)
 
-    # Flat AI file listing with token estimates for shared files.
-    # Files included in the AI context show their approximate token count
-    # so Claude can gauge the relative size/importance of each file.
+    # Flat AI file listing with file size (KB) for all files and token
+    # estimates for files shared with the LLM.  This gives Claude both
+    # the physical file size and the token cost of shared files, matching
+    # the information shown in the console tree display.
     ai_listing_parts = ["Project file structure:"]
-    for file_path, token_est in ai_file_entries:
+    for file_path, token_est, size_kb in ai_file_entries:
         if token_est is not None:
-            ai_listing_parts.append(f"{file_path}  (~{token_est} tokens)")
+            # File is shared with Claude — show KB and token estimate
+            ai_listing_parts.append(f"{file_path}  ({size_kb:.1f} KB | ~{token_est} tokens)")
         else:
-            ai_listing_parts.append(file_path)
+            # File not shared — show KB only so Claude knows it exists and its size
+            ai_listing_parts.append(f"{file_path}  ({size_kb:.1f} KB)")
     ai_file_listing = "\n".join(ai_listing_parts)
 
     return clean_tree, ai_file_listing

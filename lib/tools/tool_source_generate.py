@@ -16,6 +16,10 @@ Public API:
 
         Web search is forwarded from ``cfg.websearch`` to ``prompt_claude()``
         so Claude can search the web when enabled in the configuration.
+
+        A ``gen-source-userfullprompt.md`` artifact is exported showing
+        exactly what data is sent to Claude (system prompt + all content
+        blocks in order), enabling full traceability and debugging.
 """
 
 import os
@@ -27,7 +31,7 @@ from lib.config import Config
 from lib.export import export_md_file
 from lib.memory import build_memory_block
 from lib.token_tracker import compute_and_display_breakdown
-from lib.prompt_builder import generate_prompt_for_gen_source
+from lib.prompt_builder import generate_prompt_for_gen_source, build_readable_prompt_export
 from lib.providers.claude import prompt_claude
 from lib.validation import block_pattern, validate_claude_response
 
@@ -52,6 +56,10 @@ def generate_source(
     ``cfg.websearch_max_results`` to ``prompt_claude()``, allowing Claude
     to search the web during source list generation when enabled.
 
+    Exports ``gen-source-userfullprompt.md`` — a human-readable
+    representation of exactly what Claude receives (system prompt + all
+    content blocks), enabling full debugging and traceability.
+
     Parameters
     ----------
     cfg : Config
@@ -61,7 +69,8 @@ def generate_source(
         The user prompt — Claude uses it to decide which files are relevant
         (its instructions are NOT executed).
     tree_str : str
-        Clean human-readable directory tree (no ANSI).
+        Clean human-readable directory tree (no ANSI).  Includes file sizes
+        (KB) and token estimates for shared files.
     example_source : list[str], optional
         Existing source config to show Claude as a formatting example.
         Defaults to ``cfg.source``.
@@ -145,6 +154,14 @@ def generate_source(
         tool_context_chars=tool_context_chars,
     )
 
+    # ── Export exactly what Claude receives for debugging/traceability ────────
+    # build_readable_prompt_export produces a human-readable string combining
+    # the system prompt and all message_content blocks in order, so
+    # gen-source-userfullprompt.md is an exact textual representation of what
+    # the LLM sees — matching the same pattern used by tool_prompt_execute.
+    readable_prompt = build_readable_prompt_export(cfg.system, message_content)
+    export_md_file(readable_prompt, "gen-source-userfullprompt.md", output_dir)
+
     print("\n[tool_source_generate] Asking Claude for relevant source list...")
 
     # ── Call Claude ──────────────────────────────────────────────────────────
@@ -163,14 +180,6 @@ def generate_source(
         thinking_budget=cfg.anthropic_max_tokens_think,
         stream=True,
         recv_path=os.path.join(output_dir, "gen-source-recv.md"),
-    )
-
-    # Export the message content for debugging — includes memory block so
-    # developers can inspect exactly what context Claude received.
-    export_md_file(
-        f"{cfg.system}\n\n{message_content}",
-        "gen-source-message_content.md",
-        output_dir,
     )
 
     if result["status"] != "ok":

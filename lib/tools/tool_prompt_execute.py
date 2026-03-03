@@ -13,6 +13,10 @@ for Claude to output a ``.ai-code/long-term.md`` file block alongside
 regular code blocks.  After receiving the response, the memory block is
 extracted, saved to disk, and stripped from the response before file
 application.  This eliminates separate API calls for memory updates.
+
+Exports ``userfullprompt.md`` using ``build_readable_prompt_export()`` so
+the artifact exactly represents what Claude receives (system prompt + all
+content blocks in order).
 """
 
 import os
@@ -22,7 +26,7 @@ from lib.config import Config
 from lib.files import FileData, add_source
 from lib.images import add_images
 from lib.tree import get_directory_tree
-from lib.prompt_builder import build_message_content
+from lib.prompt_builder import build_message_content, build_readable_prompt_export
 from lib.memory import (
     build_memory_block,
     build_memory_update_instructions,
@@ -64,6 +68,10 @@ def execute_prompt(
 
     Web search is forwarded from ``cfg.websearch`` to ``prompt_claude()``,
     allowing Claude to search the web during generation when enabled.
+
+    Exports ``userfullprompt.md`` via ``build_readable_prompt_export()``
+    so the artifact is an exact textual representation of what Claude
+    receives (system prompt + all content blocks in order).
 
     Parameters
     ----------
@@ -179,18 +187,12 @@ def execute_prompt(
     )
 
     # ── 5. Export assembled prompt for record-keeping ────────────────────────
-    # Include the memory block and memory instructions in the exported prompt
-    # so developers can inspect exactly what context Claude received.
-    export_md_file(
-        "\n\n".join([cfg.system, memory_block, full_prompt, ai_file_listing, data_files]),
-        f"{label}userfullprompt.md",
-        output_dir,
-    )
-    export_md_file(
-        str(message_content),
-        f"{label}message_content.md",
-        output_dir,
-    )
+    # build_readable_prompt_export combines system prompt + all message_content
+    # blocks into a human-readable string that exactly represents what Claude
+    # receives, in the same order it sees the content.  This replaces the
+    # previous manual concatenation which could drift from actual message order.
+    readable_prompt = build_readable_prompt_export(cfg.system, message_content)
+    export_md_file(readable_prompt, f"{label}userfullprompt.md", output_dir)
 
     # ── 6. Call Claude ───────────────────────────────────────────────────────
     # websearch and websearch_max_results are forwarded from cfg so that

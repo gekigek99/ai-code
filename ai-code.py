@@ -32,7 +32,7 @@ from lib.tree import get_directory_tree
 from lib.export import export_md_file, log_prompt
 from lib.validation import validate_claude_response
 from lib.apply import claude_data_to_file
-from lib.prompt_builder import build_message_content
+from lib.prompt_builder import build_message_content, build_readable_prompt_export
 from lib.token_tracker import compute_and_display_breakdown
 from lib.memory import build_memory_block, build_memory_update_instructions
 from lib.utils import warn
@@ -158,13 +158,12 @@ def main() -> None:
         memory_instructions=memory_instructions,
     )
 
-    # Export assembled prompt for record-keeping
-    export_md_file(
-        "\n\n".join([cfg.system, cfg.prompt, ai_file_listing, data_files]),
-        "userfullprompt.md",
-        cfg.logs_dir,
-    )
-    export_md_file(str(message_content), "message_content.md", cfg.claude_output_dir)
+    # Export assembled prompt using build_readable_prompt_export so the
+    # userfullprompt.md exactly represents what Claude would receive
+    # (system prompt + all content blocks in order), matching the export
+    # format used by all tool modules.
+    readable_prompt = build_readable_prompt_export(cfg.system, message_content)
+    export_md_file(readable_prompt, "userfullprompt.md", cfg.logs_dir)
 
     # Show websearch status in dry run output so users know what would happen
     if cfg.websearch:

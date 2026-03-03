@@ -14,6 +14,9 @@ Public API:
 
         Web search is forwarded from ``cfg.websearch`` to ``prompt_claude()``
         so Claude can search the web when enabled in the configuration.
+
+        Exports ``expand-userfullprompt.md`` showing exactly what data is
+        sent to Claude (system prompt + all content blocks in order).
 """
 
 import os
@@ -28,7 +31,7 @@ from lib.memory import (
 )
 from lib.token_tracker import compute_and_display_breakdown
 from lib.tree import get_directory_tree
-from lib.prompt_builder import build_message_content, build_expand_meta_prompt
+from lib.prompt_builder import build_message_content, build_expand_meta_prompt, build_readable_prompt_export
 from lib.providers.claude import prompt_claude
 from lib.validation import block_pattern, validate_claude_response
 from lib.export import export_md_file
@@ -60,6 +63,9 @@ def expand_prompt(
     Web search is forwarded from ``cfg.websearch`` and
     ``cfg.websearch_max_results`` to ``prompt_claude()``, allowing Claude
     to search the web during prompt expansion when enabled.
+
+    Exports ``expand-userfullprompt.md`` via ``build_readable_prompt_export()``
+    so the artifact exactly represents what Claude receives.
 
     Parameters
     ----------
@@ -154,6 +160,13 @@ def expand_prompt(
         tool_context_chars=tool_context_chars,
         memory_instructions=memory_instructions,
     )
+
+    # ── Export exactly what Claude receives ───────────────────────────────────
+    # build_readable_prompt_export produces a human-readable string combining
+    # system prompt + all message_content blocks in order, so the artifact
+    # exactly represents what the LLM sees.
+    readable_prompt = build_readable_prompt_export(cfg.system, message_content)
+    export_md_file(readable_prompt, "expand-userfullprompt.md", output_dir)
 
     # ── 5. Call Claude ───────────────────────────────────────────────────────
     # websearch and websearch_max_results are forwarded from cfg so that

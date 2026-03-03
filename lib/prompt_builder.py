@@ -10,6 +10,13 @@ Public API:
         the first content block so Claude has project context before
         seeing source files.
 
+    build_readable_prompt_export(system, message_content)
+        -> str
+        Build a human-readable representation of what's sent to Claude,
+        combining the system prompt and all content blocks from
+        message_content into a single string.  Used for userfullprompt.md
+        exports so they exactly represent what the LLM receives.
+
     generate_prompt_for_gen_source(prompt, source, tree_str)
         -> list[dict]
         Build the message-content parts for the ``-gen-source`` workflow.
@@ -49,7 +56,8 @@ def build_message_content(
     prompt : str
         The user prompt text.
     ai_file_listing : str
-        Human-readable directory tree string.
+        Human-readable directory tree / file listing string (includes KB
+        and token estimates).
     memory_block : str, optional
         Pre-formatted memory text (project memory, short-term memory,
         git history).  If non-empty, prepended as the first content block
@@ -100,6 +108,62 @@ def build_message_content(
     message_content.append({"type": "text", "text": f"Directory tree structure:\n{ai_file_listing}"})
 
     return message_content, data_files
+
+
+def build_readable_prompt_export(
+    system: str,
+    message_content: List[Dict[str, Any]],
+) -> str:
+    """Build a human-readable representation of what's sent to Claude.
+
+    Combines the system prompt (sent as a separate API parameter) and all
+    content blocks from ``message_content`` into a single string.  This
+    produces a ``userfullprompt.md`` that exactly represents what the LLM
+    receives, in the same order it sees the content.
+
+    Image content blocks are represented as ``[IMAGE: media_type]``
+    placeholders since base64 data is not useful in a text export.
+
+    Parameters
+    ----------
+    system : str
+        The system prompt (sent to Claude as a separate parameter).
+    message_content : list[dict]
+        The assembled message content blocks (text, image, etc.).
+
+    Returns
+    -------
+    str
+        Human-readable prompt text suitable for export to userfullprompt.md.
+    """
+    parts: List[str] = []
+
+    # System prompt is sent as a separate API parameter but is part of
+    # what Claude sees, so include it first for completeness.
+    if system:
+        parts.append(system)
+        parts.append("\n\n")
+
+    for block in message_content:
+        block_type = block.get("type", "")
+
+        if block_type == "text":
+            parts.append(block.get("text", ""))
+            parts.append("\n")
+
+        elif block_type == "image":
+            # Image data is base64-encoded — show a placeholder with
+            # the media type so the export indicates an image was attached
+            # without dumping unreadable base64 data.
+            source = block.get("source", {})
+            media_type = source.get("media_type", "unknown")
+            parts.append(f"[IMAGE: {media_type}]\n")
+
+        else:
+            # Unknown content block type — show type for debugging
+            parts.append(f"[CONTENT BLOCK: type={block_type}]\n")
+
+    return "".join(parts)
 
 
 def generate_prompt_for_gen_source(
