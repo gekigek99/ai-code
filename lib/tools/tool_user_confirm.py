@@ -66,10 +66,6 @@ def confirm_step(step_number: int, step_title: str) -> dict:
                 print("\n[EOF/Interrupt during input — using what was entered]")
 
             modification = "\n".join(lines).strip()
-            if not modification:
-                print("[No modification entered — treating as accept]")
-                return {"action": "continue", "modification": None}
-
             return {"action": "retry", "modification": modification}
 
         elif choice == "skip":
