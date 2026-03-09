@@ -22,7 +22,7 @@ from lib.utils import COLOR_GREEN, COLOR_YELLOW, COLOR_RESET, warn
 #
 # Named groups:
 #   source  – source file path
-#   tag     – EDIT | DELETE (optional)
+#   tag     – EDIT | DELETE | PATCH (optional)
 #   move    – literal "MOVE" when present
 #   dest    – destination path for MOVE (optional)
 #   content – everything between the header and the closing marker
@@ -31,7 +31,7 @@ block_pattern = re.compile(
     r'^'
     r'\+{5}\s+'                                     # opening {'+'*5} + whitespace
     r'(?P<source>.+?)'                              # source path (non-greedy)
-    r'(?:\s*\[(?P<tag>EDIT|DELETE)\])?'             # optional [EDIT] or [DELETE]
+    r'(?:\s*\[(?P<tag>EDIT|DELETE|PATCH)\])?'       # optional [EDIT], [DELETE], or [PATCH]
     r'(?:\s*\[(?P<move>MOVE)\]\s+(?P<dest>.+?))?'  # optional [MOVE] + dest path
     r'\s*\n'                                        # end of header
     r'(?P<content>.*?)'                             # content (non-greedy, DOTALL)
