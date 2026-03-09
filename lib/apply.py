@@ -1,5 +1,5 @@
 """
-lib.apply — apply file operations (write, move, delete) from parsed response blocks.
+lib.apply — apply file operations (write, move, delete, patch) from parsed response blocks.
 
 Public API:
     claude_data_to_file(text_data, abs_file_paths=None) -> None
@@ -10,8 +10,9 @@ import os
 import shutil
 from typing import List, Optional, Set, Tuple
 
+from lib.patch import apply_patch
 from lib.validation import block_pattern
-from lib.utils import COLOR_RED, COLOR_YELLOW, COLOR_BLUE, COLOR_CYAN, COLOR_RESET
+from lib.utils import COLOR_RED, COLOR_YELLOW, COLOR_BLUE, COLOR_CYAN, COLOR_GREEN, COLOR_RESET
 
 
 def claude_data_to_file(
@@ -37,6 +38,7 @@ def claude_data_to_file(
     files_written = 0
     files_deleted = 0
     files_moved = 0
+    files_patched = 0
 
     # (action, source, destination_or_none, existed_before, in_original)
     detailed_entries: List[Tuple[str, str, Optional[str], bool, bool]] = []
@@ -96,6 +98,16 @@ def claude_data_to_file(
             detailed_entries.append(("MOVE", source_path, destination, existed_before, in_original))
             continue
 
+        # ====================== PATCH =======================
+        if tag == "PATCH":
+            success = apply_patch(source_path, content)
+            if success:
+                files_patched += 1
+                detailed_entries.append(("PATCH", source_path, None, existed_before, in_original))
+            else:
+                detailed_entries.append(("PATCH_ERROR", source_path, None, existed_before, in_original))
+            continue
+
         # ====================== WRITE (default) =============
         target_dir = os.path.dirname(source_path) or "."
         try:
@@ -118,7 +130,7 @@ def claude_data_to_file(
 
     # ====================== REPORT ==========================
     print("\nReport:")
-    print(f" {files_written} file(s) written, {files_deleted} file(s) deleted, {files_moved} file(s) moved.")
+    print(f" {files_written} file(s) written, {files_patched} file(s) patched, {files_deleted} file(s) deleted, {files_moved} file(s) moved.")
 
     if detailed_entries:
         print("\nReport (detailed):")
@@ -140,6 +152,15 @@ def claude_data_to_file(
             elif action == "MOVE_ERROR":
                 dest_str = f" -> {dest}" if dest else ""
                 line = f"{COLOR_YELLOW}{source}{dest_str} [MOVE FAILED]{COLOR_RESET}"
+
+            elif action == "PATCH":
+                if in_original:
+                    line = f"{COLOR_GREEN}{source} [PATCHED]{COLOR_RESET}"
+                else:
+                    line = f"{COLOR_YELLOW}{source} [PATCHED - WARNING, not in source]{COLOR_RESET}"
+
+            elif action == "PATCH_ERROR":
+                line = f"{COLOR_YELLOW}{source} [PATCH FAILED]{COLOR_RESET}"
 
             elif action == "WRITE":
                 if not existed_before:
