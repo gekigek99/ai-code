@@ -26,26 +26,42 @@ import yaml
 #
 # Block format:
 #   {'+'*5} ./path/to/file.ext [TAG]    ← header: opening marker + path + tag
-#   <file contents>                   ← body
+#   <file contents or hunks>            ← body
 #   {'+'*5}                             ← closing marker (standalone line)
 # ──────────────────────────────────────────────────────────────────────────────
 _FILE_OUTPUT_PATTERN_SUFFIX = """
 
 # ----- file output patterns ----- #
 
-If you want to create or overwrite a file, return the full updated code in this format:
+If you want to create a NEW file or COMPLETELY REWRITE an existing file, return the full file content:
 {marker} ./path/to/file.ext [EDIT]
-  <complete contents of the file after changes>
+  <complete contents of the file>
 {marker}
 
-If you want to move or rename a file, write:
+If you want to make SMALL, TARGETED changes to an existing file (fixing a few lines, adding a function, updating an import), use SEARCH/REPLACE hunks:
+{marker} ./path/to/file.ext [PATCH]
+<<<<<<< SEARCH
+exact existing lines to find
+=======
+replacement lines
+>>>>>>> REPLACE
+{marker}
+
+PATCH rules:
+- SEARCH section must EXACTLY match existing file content (including indentation and whitespace).
+- Each SEARCH/REPLACE hunk replaces the first occurrence found.
+- Multiple hunks can appear in one PATCH block — they are applied top to bottom.
+- Use PATCH when changing less than ~40% of a file. Use EDIT for new files or major rewrites.
+- An empty REPLACE section (nothing between ======= and >>>>>>> REPLACE) deletes the matched text.
+
+If you want to move or rename a file:
 {marker} ./path/to/old/file.ext [MOVE] ./path/to/new/file.ext
-  (don't write data, no content needed)
+  (no content needed)
 {marker}
 
-If a file should be deleted, write:
+If a file should be deleted:
 {marker} ./path/to/file.ext [DELETE]
-  (don't write data, no content needed)
+  (no content needed)
 {marker}
 
 Do not use  ``` blocks.
