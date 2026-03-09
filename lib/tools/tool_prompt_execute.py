@@ -280,7 +280,7 @@ def execute_prompt(
     files_applied = False
     if apply_to_disk:
         print("\nApplying Claude's response to disk...")
-        claude_data_to_file(data_response, original_abs_paths)
+        claude_data_to_file(data_response, original_abs_paths, patch_enabled=cfg.patch_enabled)
         files_applied = True
 
     return {

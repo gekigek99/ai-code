@@ -46,6 +46,12 @@ ANTHROPIC:
   # claude-sonnet-4-20250514
   # claude-opus-4-20250514
 
+# When true, Claude may use SEARCH/REPLACE PATCH blocks for small, targeted
+# edits instead of rewriting entire files.  When false, the PATCH instruction
+# is omitted from the system prompt and any PATCH blocks in responses are
+# treated as full-file EDITs (the content is written as-is).
+PATCH_ENABLED: true
+
 # Web search configuration:
 # WEBSEARCH: master toggle to enable/disable automatic web searches that will be
 # included in the message_content sent to Claude (DuckDuckGo).

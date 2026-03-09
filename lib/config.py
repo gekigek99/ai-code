@@ -29,6 +29,37 @@ import yaml
 #   <file contents or hunks>            ← body
 #   {'+'*5}                             ← closing marker (standalone line)
 # ──────────────────────────────────────────────────────────────────────────────
+def _build_suffix_without_patch() -> str:
+    """Return the file-output-pattern suffix with PATCH instructions removed.
+
+    Used when PATCH_ENABLED is false so Claude never sees the SEARCH/REPLACE
+    syntax and always outputs full file rewrites via [EDIT].
+    """
+    marker = "+" * 5
+    return f"""
+
+# ----- file output patterns ----- #
+
+If you want to create a NEW file or COMPLETELY REWRITE an existing file, return the full file content:
+{marker} ./path/to/file.ext [EDIT]
+  <complete contents of the file>
+{marker}
+
+If you want to move or rename a file:
+{marker} ./path/to/old/file.ext [MOVE] ./path/to/new/file.ext
+  (no content needed)
+{marker}
+
+If a file should be deleted:
+{marker} ./path/to/file.ext [DELETE]
+  (no content needed)
+{marker}
+
+Do not use  ``` blocks.
+Output only updated, new, or deleted files.
+"""
+
+
 _FILE_OUTPUT_PATTERN_SUFFIX = """
 
 # ----- file output patterns ----- #
@@ -40,11 +71,11 @@ If you want to create a NEW file or COMPLETELY REWRITE an existing file, return 
 
 If you want to make SMALL, TARGETED changes to an existing file (fixing a few lines, adding a function, updating an import), use SEARCH/REPLACE hunks:
 {marker} ./path/to/file.ext [PATCH]
-<<<<<<< SEARCH
+{markersearch} SEARCH
 exact existing lines to find
 =======
 replacement lines
->>>>>>> REPLACE
+{markerreplace} REPLACE
 {marker}
 
 PATCH rules:
@@ -66,7 +97,11 @@ If a file should be deleted:
 
 Do not use  ``` blocks.
 Output only updated, new, or deleted files.
-""".format(marker="+" * 5)
+""".format(
+    marker="+" * 5,
+    markersearch="<" * 7,
+    markerreplace=">" * 7
+)
 
 
 def _sanitize_string_list(raw_list) -> List[str]:
@@ -115,6 +150,9 @@ class Config:
     anthropic_max_tokens: int
     anthropic_max_tokens_think: int
     anthropic_temperature: float
+
+    # ── Features ─────────────────────────────────────────────────────────────
+    patch_enabled: bool           # Allow SEARCH/REPLACE PATCH blocks
 
     # ── Web search ───────────────────────────────────────────────────────────
     websearch: bool
@@ -188,9 +226,13 @@ def load_config(script_dir: str) -> Config:
     if ".ai-code/" not in exclude_patterns:
         exclude_patterns.append(".ai-code/")
 
-    # Build the full system prompt by appending the file-output-pattern suffix
+    # Build the full system prompt by appending the file-output-pattern suffix.
+    # When PATCH is disabled, strip the PATCH section from the suffix so Claude
+    # never sees the instruction and won't attempt SEARCH/REPLACE blocks.
     raw_system = raw.get("system") or ""
-    system = raw_system + _FILE_OUTPUT_PATTERN_SUFFIX
+    patch_enabled = raw.get("PATCH_ENABLED") or ""
+    suffix = _FILE_OUTPUT_PATTERN_SUFFIX if patch_enabled else _build_suffix_without_patch()
+    system = raw_system + suffix
 
     # ── Anthropic settings ───────────────────────────────────────────────────
     anthropic_api_key = anthropic.get("API_KEY", "")
@@ -201,6 +243,9 @@ def load_config(script_dir: str) -> Config:
     # Temperature is optional; default to 1.0 when absent or None
     raw_temp = anthropic.get("TEMPERATURE")
     anthropic_temperature = float(raw_temp) if raw_temp is not None else 1.0
+
+    # ── Features ─────────────────────────────────────────────────────────────
+    patch_enabled = bool(raw.get("PATCH_ENABLED", True))
 
     # ── Web search ───────────────────────────────────────────────────────────
     websearch = bool(raw.get("WEBSEARCH", False))
@@ -262,6 +307,7 @@ def load_config(script_dir: str) -> Config:
         anthropic_max_tokens=anthropic_max_tokens,
         anthropic_max_tokens_think=anthropic_max_tokens_think,
         anthropic_temperature=anthropic_temperature,
+        patch_enabled=patch_enabled,
         websearch=websearch,
         websearch_max_results=websearch_max_results,
         script_dir=script_dir,

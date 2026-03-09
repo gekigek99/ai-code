@@ -19,11 +19,11 @@ from typing import List, Tuple
 # Matches a single SEARCH/REPLACE hunk delimited by git-conflict-style markers.
 # DOTALL so '.' covers newlines inside each section.
 _HUNK_RE = re.compile(
-    r"<<<<<<< SEARCH\n"
-    r"(?P<search>.*?)"
-    r"=======\n"
-    r"(?P<replace>.*?)"
-    r">>>>>>> REPLACE",
+    rf"{'<'*7} SEARCH\n"
+    rf"(?P<search>.*?)"
+    rf"=======\n"
+    rf"(?P<replace>.*?)"
+    rf"{'>'*7} REPLACE",
     re.DOTALL,
 )
 
@@ -71,15 +71,15 @@ def _find_original_span(original: str, norm_search: str) -> Tuple[int, int]:
 # ------------------------------------------------------------------
 
 def parse_hunks(patch_content: str) -> List[Tuple[str, str]]:
-    """Parse *patch_content* into an ordered list of (search, replace) tuples.
+    f"""Parse *patch_content* into an ordered list of (search, replace) tuples.
 
     Each hunk is delimited by::
 
-        <<<<<<< SEARCH
+        {'<'*7} SEARCH
         ...
         =======
         ...
-        >>>>>>> REPLACE
+        {'>'*7} REPLACE
 
     One trailing newline is stripped from both search and replace sections
     (artifact of the marker line itself) while all internal whitespace and

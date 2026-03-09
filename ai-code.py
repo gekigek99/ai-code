@@ -98,7 +98,7 @@ def main() -> None:
             validation_ok = validate_claude_response(data_response)
             if not validation_ok:
                 warn("Validation warnings detected on saved response (see above). Proceeding anyway.")
-            claude_data_to_file(data_response, original_source_abs_file_paths)
+            claude_data_to_file(data_response, original_source_abs_file_paths, patch_enabled=cfg.patch_enabled)
         else:
             print("Empty clauderesponse file.")
         return

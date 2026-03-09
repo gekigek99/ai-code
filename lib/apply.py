@@ -18,6 +18,7 @@ from lib.utils import COLOR_RED, COLOR_YELLOW, COLOR_BLUE, COLOR_CYAN, COLOR_GRE
 def claude_data_to_file(
     text_data: str,
     abs_file_paths: Optional[Set[str]] = None,
+    patch_enabled: bool = True,
 ) -> None:
     """Parse Claude's response for file-operation blocks and apply them to disk.
 
@@ -98,7 +99,32 @@ def claude_data_to_file(
             detailed_entries.append(("MOVE", source_path, destination, existed_before, in_original))
             continue
 
+        if tag == "PATCH":
+            success = apply_patch(source_path, content)
+            if success:
+                files_patched += 1
+                detailed_entries.append(("PATCH", source_path, None, existed_before, in_original))
+            else:
+                detailed_entries.append(("PATCH_ERROR", source_path, None, existed_before, in_original))
+            continue
         # ====================== PATCH =======================
+        if tag == "PATCH":
+            if not patch_enabled:
+                # PATCH disabled — fall back to full-file write so the raw
+                # hunk content lands on disk as-is.  This is a safety net;
+                # with the feature off the system prompt never mentions PATCH,
+                # so Claude should not produce these blocks.
+                print(f"WARNING: PATCH block received but PATCH_ENABLED is false. "
+                      f"Writing raw content as full-file overwrite: {source_path}")
+                tag = ""  # fall through to the WRITE branch below
+            else:
+                success = apply_patch(source_path, content)
+                if success:
+                    files_patched += 1
+                    detailed_entries.append(("PATCH", source_path, None, existed_before, in_original))
+                else:
+                    detailed_entries.append(("PATCH_ERROR", source_path, None, existed_before, in_original))
+                continue
         if tag == "PATCH":
             success = apply_patch(source_path, content)
             if success:
