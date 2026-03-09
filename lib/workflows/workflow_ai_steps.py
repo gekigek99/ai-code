@@ -1064,6 +1064,18 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
     _print_summary(completed_count, skipped_count, total_steps)
     log_prompt(cfg.prompt, cfg.logs_dir)
 
+    # Mark Phase 3 as complete in the saved state so that
+    # _describe_previous_workflow shows "3/3" instead of "2/3".
+    _save_workflow_state({
+        "prompt_hash": prompt_hash,
+        "phase_completed": 3,
+        "expanded_prompt": expanded_prompt_text,
+        "feature_title": feature_title,
+        "steps": steps,
+        "completed_steps": sorted(completed_steps_set),
+        "skipped_steps": sorted(skipped_steps_set),
+    }, steps_output_dir)
+
     # ── Artifact retention ───────────────────────────────────────────────────
     # All workflow artifacts (state file, logs, steps.yaml, short-term memory)
     # are intentionally preserved after completion.  This allows the user to:
