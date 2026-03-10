@@ -35,7 +35,7 @@ from lib.memory import (
 )
 from lib.token_tracker import compute_and_display_breakdown
 from lib.providers.claude import prompt_claude
-from lib.validation import validate_claude_response
+from lib.validation import parse_response_json, validate_claude_response, ResponseParseError
 from lib.apply import claude_data_to_file
 from lib.export import export_md_file
 from lib.utils import warn
@@ -244,20 +244,10 @@ def execute_prompt(
     data_response = result["data_response"]
     thinking_content = result.get("thinking_content", "")
 
-    # ── 7. Validate ──────────────────────────────────────────────────────────
-    print("\n\nValidating Claude response structure...")
-    validation_ok = validate_claude_response(data_response)
-
-    if not validation_ok:
-        warn(
-            "Response validation detected issues (see warnings above). "
-            "Proceeding with file application if enabled, but review results carefully."
-        )
-
-    # ── 7b. Export full response (before memory extraction) ──────────────────
-    # Export the complete response including the memory entry for debugging.
-    # This happens before extraction so the artifact captures everything
-    # Claude returned.
+    # ── 7. Export raw artifacts FIRST ────────────────────────────────────────
+    # Export the raw response before any parsing or memory extraction so the
+    # artifact captures exactly what Claude returned — critical for debugging
+    # when JSON parsing or memory extraction fails.
     if data_response:
         export_md_file(data_response, f"{label}clauderesponse.md", output_dir)
         print(f"\n[Saved data response]")
@@ -272,14 +262,24 @@ def execute_prompt(
         export_md_file(raw_data_str, f"{label}rawdata.md", output_dir)
         print(f"[Saved {len(result['raw_data'])} raw events to file]")
 
-    # ── 8. Extract and save memory from response ─────────────────────────────
+    # ── 8. Validate JSON structure ───────────────────────────────────────────
+    print("\n\nValidating Claude response structure...")
+    validation_ok = validate_claude_response(data_response)
+
+    if not validation_ok:
+        warn(
+            "Response validation detected issues (see warnings above). "
+            "Proceeding with file application if enabled, but review results carefully."
+        )
+
+    # ── 9. Extract and save memory from response ─────────────────────────────
     # Parse the JSON response, find the .ai-code/long-term.md entry in the
     # files array, save it to cfg.memory_long_term_dir, and remove it from
     # the parsed dict.  Returns the modified parsed dict so downstream
     # claude_data_to_file never sees the memory entry.
     parsed_response = extract_and_save_memory_from_response(cfg, data_response)
 
-    # ── 9. Apply to disk ─────────────────────────────────────────────────────
+    # ── 10. Apply to disk ────────────────────────────────────────────────────
     files_applied = False
     if apply_to_disk:
         print("\nApplying Claude's response to disk...")
