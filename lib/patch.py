@@ -1,115 +1,73 @@
 """
-lib.patch — parse and apply SEARCH/REPLACE hunks from a [PATCH] block.
+lib.patch — parse and apply JSON-based PATCH hunks.
 
 Public API:
-    apply_patch(file_path: str, patch_content: str) -> bool
-        Read the existing file at *file_path*, parse *patch_content* into
-        ordered SEARCH/REPLACE hunks, apply each sequentially, and write the
-        result back.  Returns True on success, False on file-I/O failure.
-
-    parse_hunks(patch_content: str) -> list[tuple[str, str]]
-        Extract (search_text, replace_text) pairs from conflict-marker
-        delimited hunks inside *patch_content*.
+    PatchApplicationError — raised when a find string is not found in the target file.
+    parse_hunks(patches: list[dict]) -> list[tuple[str, str, str]]
+        Validate and extract (comment, find, replace) tuples from JSON patch objects.
+    apply_patch(file_path: str, patches: list[dict]) -> bool
+        Apply JSON patch hunks to an existing file. Raises PatchApplicationError on not-found.
 """
 
 import os
-import re
-from typing import List, Tuple
-
-# Matches a single SEARCH/REPLACE hunk delimited by git-conflict-style markers.
-# DOTALL so '.' covers newlines inside each section.
-_HUNK_RE = re.compile(
-    rf"{'<'*7} SEARCH\n"
-    rf"(?P<search>.*?)"
-    rf"=======\n"
-    rf"(?P<replace>.*?)"
-    rf"{'>'*7} REPLACE",
-    re.DOTALL,
-)
+from typing import Dict, List, Tuple
 
 
-def _normalize_ws(text: str) -> str:
-    """Collapse intra-line whitespace runs to single spaces and strip trailing
-    whitespace per line.  Used for the fuzzy-match fallback."""
-    lines = text.split("\n")
-    return "\n".join(re.sub(r"[ \t]+", " ", line).rstrip() for line in lines)
+class PatchApplicationError(Exception):
+    """Raised when a PATCH hunk's find text is not found in the target file."""
 
 
-def _find_original_span(original: str, norm_search: str) -> Tuple[int, int]:
-    """Return (start, end) indices inside *original* whose whitespace-normalised
-    form matches *norm_search*, or (-1, -1) if not found.
+def parse_hunks(patches: List[Dict]) -> List[Tuple[str, str, str]]:
+    """Validate and extract (comment, find, replace) tuples from JSON patch objects.
 
-    We normalise *original* line-by-line and then walk through it looking for
-    a contiguous region whose normalised form equals *norm_search*.
+    Each dict must contain:
+      - "comment": str (informational; defaults to "" if missing/invalid)
+      - "find":    str, non-empty
+      - "replace": str (may be empty — empty means delete the matched text)
+
+    Raises ``ValueError`` on structural problems.
     """
-    orig_lines = original.split("\n")
-    search_lines = norm_search.split("\n")
-    search_len = len(search_lines)
+    hunks: List[Tuple[str, str, str]] = []
 
-    if search_len == 0:
-        return (-1, -1)
+    for idx, entry in enumerate(patches):
+        if not isinstance(entry, dict):
+            raise ValueError(
+                f"Hunk #{idx + 1}: expected a dict, got {type(entry).__name__}."
+            )
 
-    norm_orig_lines = [re.sub(r"[ \t]+", " ", l).rstrip() for l in orig_lines]
+        # comment — optional, informational
+        comment = entry.get("comment", "")
+        if not isinstance(comment, str):
+            comment = ""
 
-    for i in range(len(norm_orig_lines) - search_len + 1):
-        if norm_orig_lines[i : i + search_len] == search_lines:
-            # Map line indices back to character offsets in the original string.
-            start = sum(len(orig_lines[j]) + 1 for j in range(i))  # +1 for '\n'
-            end = start + sum(len(orig_lines[i + j]) + 1 for j in range(search_len))
-            # end includes the trailing '\n' of the last matched line; but the
-            # search text itself may or may not end with '\n', so trim if the
-            # slice overshoots the string length.
-            if end > len(original):
-                end = len(original)
-            return (start, end)
+        # find — required, non-empty string
+        find = entry.get("find")
+        if find is None or not isinstance(find, str):
+            raise ValueError(
+                f"Hunk #{idx + 1}: \"find\" is missing or not a string."
+            )
+        if find == "":
+            raise ValueError(f"Hunk #{idx + 1} has empty find text.")
 
-    return (-1, -1)
+        # replace — required, must be string (empty is allowed)
+        replace = entry.get("replace")
+        if replace is None or not isinstance(replace, str):
+            raise ValueError(
+                f"Hunk #{idx + 1}: \"replace\" is missing or not a string."
+            )
 
-
-# ------------------------------------------------------------------
-# Public helpers
-# ------------------------------------------------------------------
-
-def parse_hunks(patch_content: str) -> List[Tuple[str, str]]:
-    f"""Parse *patch_content* into an ordered list of (search, replace) tuples.
-
-    Each hunk is delimited by::
-
-        {'<'*7} SEARCH
-        ...
-        =======
-        ...
-        {'>'*7} REPLACE
-
-    One trailing newline is stripped from both search and replace sections
-    (artifact of the marker line itself) while all internal whitespace and
-    newlines are preserved exactly.
-    """
-    hunks: List[Tuple[str, str]] = []
-
-    for m in _HUNK_RE.finditer(patch_content):
-        search = m.group("search")
-        replace = m.group("replace")
-
-        # Strip exactly one trailing newline (marker-line artifact).
-        if search.endswith("\n"):
-            search = search[:-1]
-        if replace.endswith("\n"):
-            replace = replace[:-1]
-
-        hunks.append((search, replace))
-
-    if not hunks:
-        print("WARNING: No valid SEARCH/REPLACE hunks found in patch content.")
+        hunks.append((comment, find, replace))
 
     return hunks
 
 
-def apply_patch(file_path: str, patch_content: str) -> bool:
-    """Apply a series of SEARCH/REPLACE hunks to an existing file.
+def apply_patch(file_path: str, patches: List[Dict]) -> bool:
+    """Apply a series of JSON-based SEARCH/REPLACE hunks to an existing file.
 
-    Returns True when file I/O succeeded (even if individual hunks were
-    skipped), False on any file-level error.
+    Raises ``PatchApplicationError`` if any hunk's find text is not located
+    in the file content — exact match only, no fuzzy fallback.
+
+    Returns True on success, False on file I/O error.
     """
 
     # --- read -----------------------------------------------------------
@@ -125,51 +83,39 @@ def apply_patch(file_path: str, patch_content: str) -> bool:
         return False
 
     # --- parse hunks ----------------------------------------------------
-    hunks = parse_hunks(patch_content)
+    try:
+        hunks = parse_hunks(patches)
+    except ValueError as e:
+        print(f"ERROR: [{file_path}] Invalid patch data: {e}")
+        return False
+
     if not hunks:
-        # Nothing to apply — file is untouched; still a "success" for I/O.
+        # Empty patches list — nothing to apply, file untouched.
         return True
 
     # --- apply hunks sequentially ---------------------------------------
-    for idx, (search, replace) in enumerate(hunks, start=1):
-        # Edge case: empty search text is meaningless.
-        if search == "":
-            print(f"WARNING: [{file_path}] Hunk #{idx} has empty SEARCH section — skipped.")
-            continue
+    for idx, (comment, find_text, replace_text) in enumerate(hunks, start=1):
+        pos = content.find(find_text)
 
-        # --- exact match ------------------------------------------------
-        pos = content.find(search)
-        if pos != -1:
-            # Info note when multiple occurrences exist.
-            if content.find(search, pos + 1) != -1:
-                print(
-                    f"INFO: [{file_path}] Hunk #{idx} matched multiple locations; "
-                    "replacing first occurrence only."
-                )
-            content = content.replace(search, replace, 1)
-            continue
+        if pos == -1:
+            # Hard error — exact match required, no fallback.
+            preview_lines = find_text.split("\n")[:3]
+            preview = "\n    ".join(preview_lines)
+            label = f"'{comment}'" if comment else f"#{idx}"
+            raise PatchApplicationError(
+                f"[{file_path}] Hunk {label} — find text not found. "
+                f"First 3 lines:\n    {preview}"
+            )
 
-        # --- whitespace-normalised fallback -----------------------------
-        norm_search = _normalize_ws(search)
-        start, end = _find_original_span(content, norm_search)
+        # Warn on multiple matches — still replace first only.
+        if content.find(find_text, pos + 1) != -1:
+            label = f"'{comment}'" if comment else f"#{idx}"
+            print(
+                f"INFO: [{file_path}] Hunk {label} matched multiple locations; "
+                "replacing first occurrence only."
+            )
 
-        if start != -1:
-            if _normalize_ws(content).count(norm_search) > 1:
-                print(
-                    f"INFO: [{file_path}] Hunk #{idx} matched multiple locations "
-                    "(whitespace-normalised); replacing first occurrence only."
-                )
-            content = content[:start] + replace + content[end:]
-            continue
-
-        # --- not found at all -------------------------------------------
-        preview_lines = search.split("\n")[:3]
-        preview = "\n    ".join(preview_lines)
-        print(
-            f"WARNING: [{file_path}] Hunk #{idx} — search text not found. "
-            f"Hunk SKIPPED.\n"
-            f"  First 3 lines of search text:\n    {preview}"
-        )
+        content = content.replace(find_text, replace_text, 1)
 
     # --- write back -----------------------------------------------------
     try:
