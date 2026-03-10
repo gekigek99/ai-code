@@ -25,11 +25,14 @@ Public API:
         -> str
         Build the meta-prompt text that instructs Claude to expand a minimal
         prompt into a comprehensive implementation specification.
+        Output is a JSON object with a single EDIT entry for expanded-prompt.md.
 
     build_stepize_meta_prompt(expanded_prompt)
         -> str
         Build the meta-prompt text that instructs Claude to decompose an
         expanded prompt into ordered, atomic implementation steps.
+        Output is a JSON object with a single EDIT entry for steps.yaml
+        containing YAML content.
         Each step includes a ``category`` field for commit message context,
         and the top-level YAML includes a ``feature_title`` field.
 """
@@ -194,10 +197,10 @@ def generate_prompt_for_gen_source(
         {
             "type": "text",
             "text": (
-                "REQUEST: Generate a new adapted source with files and folders for the "
-                "following prompt. Write it in file ./source.md. There should be only this "
-                "file as output. Use YAML format. Don't use code blocks. Add comments to "
-                "the list entries/groups"
+                "REQUEST: Generate a new adapted source file list for the following prompt. "
+                "Your response must be a single JSON object with a files array containing one EDIT entry "
+                "for ./source.md. The content should be YAML format listing the source paths. "
+                "Add comments to the list entries/groups."
             ),
         },
         {
@@ -228,12 +231,13 @@ def build_expand_meta_prompt(minimal_prompt: str) -> str:
     """Build the meta-prompt that instructs Claude to expand a minimal prompt.
 
     The meta-prompt tells Claude to produce a detailed implementation
-    specification WITHOUT implementing any code.  The result should be
-    written to a {'+'*5} ./expanded-prompt.md [EDIT]`` block.
+    specification WITHOUT implementing any code.  The result is returned
+    as a JSON object with a single EDIT entry for ``./expanded-prompt.md``.
 
     If memory update instructions are appended to this prompt (by the
-    calling tool), Claude will also output a memory file block — this is
-    explicitly allowed alongside the expanded-prompt.md block.
+    calling tool), Claude will also include a memory file entry in the
+    JSON ``files`` array — this is explicitly allowed alongside the
+    expanded-prompt.md entry.
 
     Parameters
     ----------
@@ -276,24 +280,31 @@ Be exhaustive. The expanded specification will be used to generate atomic implem
 so every detail matters. Reference specific files, function names, and database tables from
 the provided source code.
 
-OUTPUT FORMAT: Write your complete expanded specification inside a single file block:
-{_marker()} ./expanded-prompt.md [EDIT]
-<your comprehensive specification here>
-{_marker()}
+OUTPUT FORMAT: Your response must be a single JSON object. Include the expanded specification as a file entry:
+{{
+  "files": [
+    {{
+      "action": "EDIT",
+      "path": "./expanded-prompt.md",
+      "content": "<your comprehensive specification here — remember to JSON-escape all special characters>"
+    }}
+  ]
+}}
 
-Do not include any other code or project file blocks — only the expanded-prompt.md block
-(and the memory file block if memory update instructions are included below)."""
+Do not include any other entries in the files array — only the expanded-prompt.md entry (and the memory file entry if memory update instructions are included below)."""
 
 
 def build_stepize_meta_prompt(expanded_prompt: str) -> str:
     """Build the meta-prompt that instructs Claude to decompose a prompt into steps.
 
     The meta-prompt tells Claude to produce ordered, atomic implementation
-    steps in YAML format inside a ``{'+'*5} ./steps.yaml [EDIT]`` block.
+    steps in YAML format inside a JSON ``files`` array entry for
+    ``./steps.yaml``.
 
     If memory update instructions are appended to this prompt (by the
-    calling tool), Claude will also output a memory file block — this is
-    explicitly allowed alongside the steps.yaml block.
+    calling tool), Claude will also include a memory file entry in the
+    JSON ``files`` array — this is explicitly allowed alongside the
+    steps.yaml entry.
 
     The YAML output includes:
       - ``feature_title``: a short label for the overall feature being built
@@ -352,33 +363,17 @@ Additionally, provide a top-level **feature_title** — a concise label (2-6 wor
 
 TARGET: Aim for 3-10 steps depending on complexity. Prefer more granular steps over fewer large ones.
 
-OUTPUT FORMAT: Write the step decomposition as YAML inside a single file block:
-{_marker()} ./steps.yaml [EDIT]
-feature_title: "Short feature description"
-steps:
-  - number: 1
-    title: "Example step title"
-    category: "database"
-    prompt: |
-      Detailed implementation prompt for this step...
-      Include all context needed.
-    source:
-      - ./path/to/relevant/file.ext
-      - ./path/to/another/file.ext
-  - number: 2
-    title: "Next step title"
-    category: "api"
-    prompt: |
-      ...
-    source:
-      - ...
-{_marker()}
+OUTPUT FORMAT: Your response must be a single JSON object. Include the step decomposition as a file entry with YAML content:
+{{
+  "files": [
+    {{
+      "action": "EDIT",
+      "path": "./steps.yaml",
+      "content": "feature_title: \\"Short feature description\\"\\nsteps:\\n  - number: 1\\n    title: \\"Example step title\\"\\n    category: \\"database\\"\\n    prompt: |\\n      Detailed implementation prompt...\\n    source:\\n      - ./path/to/file.ext\\n"
+    }}
+  ]
+}}
 
-Do not include any other code or project file blocks — only the steps.yaml block
-(and the memory file block if memory update instructions are included below)."""
+The content value must be the complete YAML text, properly JSON-escaped (newlines as \\n, quotes as \\", etc.).
 
-
-def _marker() -> str:
-    """Return the 5-plus-sign marker string without triggering the pattern
-    in this source file itself (which would confuse ai-code's own parser)."""
-    return "+" * 5
+Do not include any other entries in the files array — only the steps.yaml entry (and the memory file entry if memory update instructions are included below)."""
