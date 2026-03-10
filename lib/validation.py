@@ -1,141 +1,181 @@
 """
-lib.validation — response structural validation and block-detection regex.
+lib.validation — JSON response parsing and structural validation.
 
 Public API:
-    block_pattern       — compiled regex that matches file-operation blocks.
+    ResponseParseError  — exception for invalid/unparseable JSON responses.
+    parse_response_json(raw_text) -> dict
+        Parse and validate Claude's JSON response.
     validate_claude_response(text_data) -> bool
-        Check structural integrity of a Claude response before applying
-        file operations.
+        Validate and print summary of Claude's JSON response.
 """
 
-import re
+import json
 from typing import List
 
 from lib.utils import COLOR_GREEN, COLOR_YELLOW, COLOR_RESET, warn
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Block-detection regex
-# ──────────────────────────────────────────────────────────────────────────────
-# Header line:  {'+'*5} <source_path> [optional TAG] [optional MOVE dest]<newline>
-# Body:         anything (non-greedy)
-# Closing line: {'+'*5} (exactly, at start of line, nothing else)
-#
-# Named groups:
-#   source  – source file path
-#   tag     – EDIT | DELETE | PATCH (optional)
-#   move    – literal "MOVE" when present
-#   dest    – destination path for MOVE (optional)
-#   content – everything between the header and the closing marker
-# ──────────────────────────────────────────────────────────────────────────────
-block_pattern = re.compile(
-    r'^'
-    r'\+{5}\s+'                                     # opening {'+'*5} + whitespace
-    r'(?P<source>.+?)'                              # source path (non-greedy)
-    r'(?:\s*\[(?P<tag>EDIT|DELETE|PATCH)\])?'       # optional [EDIT], [DELETE], or [PATCH]
-    r'(?:\s*\[(?P<move>MOVE)\]\s+(?P<dest>.+?))?'  # optional [MOVE] + dest path
-    r'\s*\n'                                        # end of header
-    r'(?P<content>.*?)'                             # content (non-greedy, DOTALL)
-    r'^\+{5}$',                                     # closing {'+'*5} on its own line
-    re.MULTILINE | re.DOTALL,
-)
 
-# Marker-line regex — counts every line starting with 5+ plus signs
-_MARKER_LINE_RE = re.compile(r'^\+{5,}', re.MULTILINE)
+# ──────────────────────────────────────────────────────────────────────────────
+# Exception
+# ──────────────────────────────────────────────────────────────────────────────
 
+class ResponseParseError(Exception):
+    """Raised when Claude's JSON response cannot be parsed or is structurally invalid."""
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Allowed actions and their required keys beyond the universal {action, path}
+# ──────────────────────────────────────────────────────────────────────────────
+
+_ACTION_REQUIRED_KEYS = {
+    "EDIT":   {"content": str},
+    "DELETE": {},
+    "MOVE":   {"destination": str},
+    "PATCH":  {"patches": list},
+}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Core parser
+# ──────────────────────────────────────────────────────────────────────────────
+
+def parse_response_json(raw_text: str) -> dict:
+    """Parse and structurally validate Claude's JSON response.
+
+    Returns the parsed dict on success.
+    Raises ``ResponseParseError`` on any failure — empty input, malformed
+    JSON, missing keys, wrong types, unknown actions.
+    """
+
+    # ── Empty / whitespace guard ─────────────────────────────────────────
+    if not raw_text or not raw_text.strip():
+        raise ResponseParseError("Response is empty or whitespace-only.")
+
+    text = raw_text.strip()
+
+    # ── Strip optional ```json … ``` fences ──────────────────────────────
+    if text.startswith("```json"):
+        text = text[len("```json"):].lstrip("\n")
+        if text.endswith("```"):
+            text = text[:-3].rstrip("\n")
+    elif text.startswith("```"):
+        text = text[3:].lstrip("\n")
+        if text.endswith("```"):
+            text = text[:-3].rstrip("\n")
+
+    # ── JSON decode ──────────────────────────────────────────────────────
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        # Build a context preview around the error position
+        pos = exc.pos or 0
+        start = max(0, pos - 50)
+        end = min(len(text), pos + 50)
+        preview = text[start:end]
+        raise ResponseParseError(
+            f"JSON decode failed: {exc.msg} (line {exc.lineno}, col {exc.colno}, pos {pos}). "
+            f"Context: ...{preview!r}..."
+        ) from exc
+
+    # ── Top-level structure ──────────────────────────────────────────────
+    if not isinstance(parsed, dict):
+        raise ResponseParseError(
+            f"Top-level JSON value must be an object (dict), got {type(parsed).__name__}."
+        )
+
+    if "files" not in parsed:
+        raise ResponseParseError(
+            "Top-level object is missing required key \"files\"."
+        )
+
+    files = parsed["files"]
+    if not isinstance(files, list):
+        raise ResponseParseError(
+            f"\"files\" must be a list, got {type(files).__name__}."
+        )
+
+    # ── Per-entry validation ─────────────────────────────────────────────
+    for idx, entry in enumerate(files):
+        _prefix = f"files[{idx}]"
+
+        if not isinstance(entry, dict):
+            raise ResponseParseError(
+                f"{_prefix}: entry must be an object, got {type(entry).__name__}."
+            )
+
+        # action — required, must be known
+        action = entry.get("action")
+        if action is None:
+            raise ResponseParseError(f"{_prefix}: missing required key \"action\".")
+        if action not in _ACTION_REQUIRED_KEYS:
+            raise ResponseParseError(
+                f"{_prefix}: unknown action \"{action}\". "
+                f"Allowed: {', '.join(sorted(_ACTION_REQUIRED_KEYS))}."
+            )
+
+        # path — required, non-empty string
+        path = entry.get("path")
+        if path is None:
+            raise ResponseParseError(f"{_prefix}: missing required key \"path\".")
+        if not isinstance(path, str) or not path.strip():
+            raise ResponseParseError(f"{_prefix}: \"path\" must be a non-empty string.")
+
+        # action-specific keys
+        required = _ACTION_REQUIRED_KEYS[action]
+        for key, expected_type in required.items():
+            val = entry.get(key)
+            if val is None:
+                raise ResponseParseError(
+                    f"{_prefix} (action={action}): missing required key \"{key}\"."
+                )
+            if not isinstance(val, expected_type):
+                raise ResponseParseError(
+                    f"{_prefix} (action={action}): \"{key}\" must be {expected_type.__name__}, "
+                    f"got {type(val).__name__}."
+                )
+            # Extra constraints
+            if key == "destination" and not val.strip():
+                raise ResponseParseError(
+                    f"{_prefix} (action=MOVE): \"destination\" must be a non-empty string."
+                )
+            if key == "patches" and len(val) == 0:
+                raise ResponseParseError(
+                    f"{_prefix} (action=PATCH): \"patches\" must be a non-empty list."
+                )
+
+    return parsed
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Human-friendly validation wrapper
+# ──────────────────────────────────────────────────────────────────────────────
 
 def validate_claude_response(text_data: str) -> bool:
-    """Validate structural integrity of Claude's response.
+    """Parse, validate, and print a summary of Claude's JSON response.
 
-    Checks performed:
-      1. Lines beginning with ``{'+'*5}`` must come in an even count (2 per block).
-      2. Data outside matched blocks is less than 3 % of total response length.
-
-    Returns True if all checks pass, False otherwise.  Warnings are printed
-    to stdout.
+    Returns True on success, False on failure.
     """
-    if not text_data or not text_data.strip():
-        warn("VALIDATION SKIP: Response is empty or whitespace-only.")
+    try:
+        parsed = parse_response_json(text_data)
+    except ResponseParseError as exc:
+        print(f"\n{COLOR_YELLOW}{'=' * 60}{COLOR_RESET}")
+        print(f"{COLOR_YELLOW}  RESPONSE VALIDATION FAILED{COLOR_RESET}")
+        print(f"{COLOR_YELLOW}{'=' * 60}{COLOR_RESET}")
+        warn(str(exc))
+        print(f"{COLOR_YELLOW}{'=' * 60}{COLOR_RESET}\n")
         return False
 
-    warnings: List[str] = []
-    passed = True
+    files = parsed["files"]
+    total = len(files)
 
-    # ── Check 1: marker lines must be even ───────────────────────────────────
-    marker_lines = _MARKER_LINE_RE.findall(text_data)
-    marker_count = len(marker_lines)
+    # Build action breakdown
+    counts: dict[str, int] = {}
+    for entry in files:
+        a = entry["action"]
+        counts[a] = counts.get(a, 0) + 1
 
-    if marker_count == 0:
-        msg = f"VALIDATION WARN: No {'+'*5} marker lines found in response – no file blocks detected."
-        warnings.append(msg)
-        passed = False
-    elif marker_count % 2 != 0:
-        msg = (
-            f"VALIDATION FAIL: {'+'*5} marker line count is ODD ({marker_count}). "
-            f"Expected an even number (exactly 2 per block). "
-            f"This means at least one block is missing its header or closing marker."
-        )
-        warnings.append(msg)
-        passed = False
-    else:
-        block_count_est = marker_count // 2
-        msg = f"VALIDATION OK: {'+'*5} marker lines = {marker_count} (= {block_count_est} block(s)), count is even."
-        print(f"{COLOR_GREEN}{msg}{COLOR_RESET}")
+    breakdown = ", ".join(f"{count} {action}" for action, count in sorted(counts.items()))
+    summary = f"VALIDATION PASSED: {total} file entry(ies) — {breakdown}"
+    print(f"{COLOR_GREEN}{summary}{COLOR_RESET}")
 
-    # ── Check 2: outside-block percentage < 3 % ─────────────────────────────
-    total_len = len(text_data)
-    inside_len = sum(m.end() - m.start() for m in block_pattern.finditer(text_data))
-    outside_len = total_len - inside_len
-    outside_pct = (outside_len / total_len) * 100.0 if total_len > 0 else 0.0
-    matched_blocks = len(list(block_pattern.finditer(text_data)))
-
-    pct_msg = (
-        f"Response length: {total_len} chars | "
-        f"Inside blocks: {inside_len} chars | "
-        f"Outside blocks: {outside_len} chars | "
-        f"Outside percentage: {outside_pct:.2f}% | "
-        f"Matched blocks: {matched_blocks}"
-    )
-    print(pct_msg)
-
-    OUTSIDE_THRESHOLD_PCT = 3.0
-    if outside_pct > OUTSIDE_THRESHOLD_PCT:
-        # Collect text that is outside matched blocks for diagnostics
-        outside_snippets: List[str] = []
-        prev_end = 0
-        for m in block_pattern.finditer(text_data):
-            gap = text_data[prev_end:m.start()].strip()
-            if gap:
-                outside_snippets.append(gap)
-            prev_end = m.end()
-        trailing = text_data[prev_end:].strip()
-        if trailing:
-            outside_snippets.append(trailing)
-
-        combined_outside = "\n---\n".join(outside_snippets)
-        if len(combined_outside) > 500:
-            combined_outside = combined_outside[:500] + "... [truncated]"
-
-        msg = (
-            f"VALIDATION FAIL: {outside_pct:.2f}% of response data is outside {'+'*5} blocks "
-            f"(threshold: {OUTSIDE_THRESHOLD_PCT:.1f}%). "
-            f"This likely means Claude emitted prose, explanations, or malformed blocks.\n"
-            f"Outside content preview:\n{combined_outside}"
-        )
-        warnings.append(msg)
-        passed = False
-    else:
-        ok_msg = f"VALIDATION OK: Outside-block percentage {outside_pct:.2f}% is within {OUTSIDE_THRESHOLD_PCT:.1f}% threshold."
-        print(f"{COLOR_GREEN}{ok_msg}{COLOR_RESET}")
-
-    # ── Emit accumulated warnings ────────────────────────────────────────────
-    if warnings:
-        print(f"\n{COLOR_YELLOW}{'='*60}{COLOR_RESET}")
-        print(f"{COLOR_YELLOW}  RESPONSE VALIDATION WARNINGS ({len(warnings)}){COLOR_RESET}")
-        print(f"{COLOR_YELLOW}{'='*60}{COLOR_RESET}")
-        for w in warnings:
-            warn(w)
-        print(f"{COLOR_YELLOW}{'='*60}{COLOR_RESET}\n")
-    else:
-        print(f"{COLOR_GREEN}VALIDATION PASSED: All checks OK.{COLOR_RESET}")
-
-    return passed
+    return True
