@@ -7,10 +7,10 @@ Public API:
         Returns steps with ``category`` fields and a ``feature_title``.
 
         Memory is updated inline: when ``cfg.memory_auto_update`` is True,
-        Claude outputs an updated ``.ai-code/memory/long-term.md`` block
-        alongside the steps.yaml block.  This ensures memory is kept current
-        whenever Claude reads project files, even during non-code-writing
-        phases like step decomposition.
+        Claude outputs an updated ``.ai-code/memory/long-term.md`` entry
+        in the JSON ``files`` array alongside the steps.yaml entry.  This
+        ensures memory is kept current whenever Claude reads project files,
+        even during non-code-writing phases like step decomposition.
 
         Web search is forwarded from ``cfg.websearch`` to ``prompt_claude()``
         so Claude can search the web when enabled in the configuration.
@@ -35,7 +35,7 @@ from lib.token_tracker import compute_and_display_breakdown
 from lib.tree import get_directory_tree
 from lib.prompt_builder import build_message_content, build_stepize_meta_prompt, build_readable_prompt_export
 from lib.providers.claude import prompt_claude
-from lib.validation import block_pattern, validate_claude_response
+from lib.validation import parse_response_json, validate_claude_response, ResponseParseError
 from lib.export import export_md_file
 from lib.utils import warn
 
@@ -51,15 +51,15 @@ def stepize_prompt(
     """Decompose an expanded prompt into ordered implementation steps.
 
     Claude receives the source file content, long-term project memory, and a
-    meta-prompt instructing it to produce a YAML step list in a
-    ``{'+'*5} ./steps.yaml [EDIT]`` block.
+    meta-prompt instructing it to produce a steps.yaml EDIT entry in its
+    JSON ``files`` array.
 
     When ``cfg.memory_auto_update`` is True, inline memory update instructions
     are appended to the meta-prompt so Claude also outputs an updated
-    ``.ai-code/memory/long-term.md`` block.  This ensures the project memory
+    ``.ai-code/memory/long-term.md`` entry.  This ensures the project memory
     is refreshed whenever Claude reads source files — not just during code
-    execution phases.  The memory block is extracted and saved to disk, then
-    stripped from the response before extracting the steps.yaml block.
+    execution phases.  The memory entry is extracted and saved to disk, then
+    removed from the parsed response before extracting the steps.yaml entry.
 
     Web search is forwarded from ``cfg.websearch`` and
     ``cfg.websearch_max_results`` to ``prompt_claude()``, allowing Claude
@@ -130,7 +130,7 @@ def stepize_prompt(
 
     # ── 2c. Build inline memory update instructions ──────────────────────────
     # Appended to the meta-prompt so Claude outputs an updated memory file
-    # block alongside the steps.yaml block.  This keeps the project memory
+    # entry alongside the steps.yaml entry.  This keeps the project memory
     # current whenever Claude reads source files — even during non-code-writing
     # phases like step decomposition.
     memory_instructions = build_memory_update_instructions(cfg)
@@ -146,7 +146,7 @@ def stepize_prompt(
 
     # Append memory update instructions to the meta-prompt so they are part
     # of the prompt Claude sees.  The stepize meta-prompt explicitly allows
-    # the memory file block alongside the steps.yaml block.
+    # the memory file entry alongside the steps.yaml entry.
     full_meta_prompt = meta_prompt + memory_instructions if memory_instructions else meta_prompt
 
     # ── 4. Build message content ─────────────────────────────────────────────
@@ -228,30 +228,28 @@ def stepize_prompt(
         export_md_file(raw_data_str, "stepize-rawdata.md", output_dir)
 
     # ── 7b. Extract and save memory from response ────────────────────────────
-    # Parse the .ai-code/memory/long-term.md block from the response, save it
-    # to cfg.memory_long_term_dir, and strip it from the response before
-    # extracting the steps.yaml block.  This ensures the memory file doesn't
-    # interfere with tool-specific block extraction.
-    data_response = extract_and_save_memory_from_response(cfg, data_response)
+    # Parse JSON, extract the .ai-code/memory/long-term.md entry, save it to
+    # cfg.memory_long_term_dir, and return the parsed dict with the memory
+    # entry removed.  Downstream code operates on the dict, not raw text.
+    parsed_response = extract_and_save_memory_from_response(cfg, data_response)
 
-    # ── 8. Extract steps.yaml block and parse ────────────────────────────────
+    # ── 8. Extract steps.yaml from parsed JSON files array ───────────────────
     steps_yaml = ""
-    for m in block_pattern.finditer(data_response):
-        source_path = m.group("source").strip()
-        content = m.group("content").strip()
-        if "steps.yaml" in source_path or "steps.yml" in source_path:
-            steps_yaml = content
+    for entry in parsed_response.get("files", []):
+        path = entry.get("path", "")
+        if ("steps.yaml" in path or "steps.yml" in path) and entry.get("action") == "EDIT":
+            steps_yaml = entry.get("content", "").strip()
             break
 
     if not steps_yaml:
-        print("[tool_prompt_stepize] WARNING: No steps.yaml block found in response")
+        print("[tool_prompt_stepize] WARNING: No steps.yaml entry found in response")
         return {
             "status": "error",
             "steps": [],
             "feature_title": "",
             "raw_response": data_response,
             "thinking": thinking_content,
-            "error": "No steps.yaml block found in Claude response",
+            "error": "No steps.yaml entry found in Claude response",
         }
 
     # Parse the YAML
