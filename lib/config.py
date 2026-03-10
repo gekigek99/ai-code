@@ -110,6 +110,8 @@ All string values in the JSON must be valid JSON strings. Escape newlines as \\n
 ## Output constraint
 
 Output ONLY the JSON object. No markdown, no code fences, no explanatory text before or after the JSON.
+
+Do NOT include any preamble, reasoning, thinking, commentary, or explanation outside the JSON object. Your entire response must start with `{{` and end with `}}`. Any text outside the JSON — including phrases like "Here is the JSON", "Let me analyze", or "I'll implement" — is a format violation.
 """
 
 
@@ -322,3 +324,4 @@ def load_config(script_dir: str) -> Config:
         memory_long_term_dir=memory_long_term_dir,
         memory_short_term_dir=memory_short_term_dir,
     )
+
