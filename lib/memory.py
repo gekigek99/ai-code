@@ -5,8 +5,8 @@ Manages reading, writing, assembling, and inline-updating project memory
 that is injected into LLM prompts to provide cross-session continuity.
 
 Memory updates are performed **inline**: the main execution prompt includes
-instructions for Claude to output a ``.ai-code/memory/long-term.md`` file
-block alongside regular code blocks.  This eliminates separate API calls
+instructions for Claude to output a memory entry in the JSON ``files``
+array alongside regular code entries.  This eliminates separate API calls
 for memory updates, saving tokens and latency.
 
 Memory layout:
@@ -30,13 +30,15 @@ Public API:
 
     build_memory_update_instructions(cfg) -> str
         Build instructions appended to the user prompt that ask Claude to
-        output an updated ``.ai-code/memory/long-term.md`` block inline with
-        other file blocks.  Returns empty string when memory updates are disabled.
+        include an updated ``.ai-code/memory/long-term.md`` entry in the
+        JSON ``files`` array.  Returns empty string when memory updates
+        are disabled.
 
-    extract_and_save_memory_from_response(cfg, response_text) -> str
-        Parse the response for a ``long-term.md`` block, save it to
-        cfg.memory_long_term_dir, and return the response with the memory
-        block removed so it is not applied as a project file.
+    extract_and_save_memory_from_response(cfg, response_text) -> dict
+        Parse the JSON response, find the ``long-term.md`` entry in the
+        ``files`` array, save it to cfg.memory_long_term_dir, remove it
+        from the array, and return the modified parsed dict so downstream
+        code never sees the memory entry.
 """
 
 import os
@@ -55,10 +57,10 @@ from lib.utils import warn
 _LONG_TERM_FILENAME = "long-term.md"
 _SHORT_TERM_FILENAME = "short-term.md"
 
-# Relative path used in Claude's file output blocks for the memory file.
+# Relative path used in Claude's JSON file entries for the memory file.
 # This path is relative to the ai-code script directory (the working dir
-# when ai-code runs).  Claude outputs this path in its {'+'*5} block header,
-# and extract_and_save_memory_from_response matches against it.
+# when ai-code runs).  Claude outputs this path in the "path" field of
+# its JSON entry, and extract_and_save_memory_from_response matches it.
 #
 # Layout:  <project_root>/.ai-code/memory/long-term.md
 # From ai-code dir: ../.ai-code/memory/long-term.md
@@ -271,17 +273,16 @@ def build_memory_block(cfg: Config, include_short_term: bool = False) -> MemoryB
 # ══════════════════════════════════════════════════════════════════════════════
 
 def build_memory_update_instructions(cfg: Config) -> str:
-    """Build instructions that ask Claude to output an updated memory file inline.
+    """Build instructions that ask Claude to include an updated memory entry
+    in the JSON ``files`` array.
 
     These instructions are appended to the user prompt so that Claude
-    produces a ``.ai-code/memory/long-term.md`` file block alongside its
-    regular code output — eliminating the need for a separate API call to
-    update memory.  Claude already has the existing memory from the
-    ``[MEMORY START]`` context block and sees all source files in the
-    prompt, so it has everything needed to produce an accurate update.
-
-    The memory file path uses ``.ai-code/memory/`` so it is stored in the
-    master project root and tracked in the master project's git history.
+    produces an EDIT entry for ``.ai-code/memory/long-term.md`` in its
+    JSON ``files`` array alongside regular code entries — eliminating the
+    need for a separate API call to update memory.  Claude already has the
+    existing memory from the ``[MEMORY START]`` context block and sees all
+    source files in the prompt, so it has everything needed to produce an
+    accurate update.
 
     Parameters
     ----------
@@ -315,17 +316,17 @@ def build_memory_update_instructions(cfg: Config) -> str:
             "seen and the changes you are making (no existing memory was found)."
         )
 
-    marker = "+" * 5
-
     return f"""
 
 # ----- MEMORY UPDATE ----- #
 {context_ref}
 
-In addition to your regular file output, also output an updated project memory file block:
-{marker} ./{_MEMORY_BLOCK_PATH} [EDIT]
-<updated project memory>
-{marker}
+In addition to your regular file output, include an additional entry in your `files` JSON array:
+{{
+  "action": "EDIT",
+  "path": "./{_MEMORY_BLOCK_PATH}",
+  "content": "<updated project memory content>"
+}}
 
 Memory format rules:
 - Ultra-condensed bullet points only, no prose or explanations
@@ -344,68 +345,79 @@ Memory format rules:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Inline memory extraction — parse memory block from Claude response
+# Inline memory extraction — parse memory entry from Claude's JSON response
 # ══════════════════════════════════════════════════════════════════════════════
 
-def extract_and_save_memory_from_response(cfg: Config, response_text: str) -> str:
-    """Extract ``long-term.md`` block from the response, save it, and
-    return the response with the memory block removed.
+def extract_and_save_memory_from_response(cfg: Config, response_text: str) -> dict:
+    """Extract ``long-term.md`` entry from the parsed JSON response, save it,
+    and return the response dict with the memory entry removed from ``files``.
 
     This is called after Claude responds to a prompt that included inline
     memory update instructions (via :func:`build_memory_update_instructions`).
-    The memory block is saved to ``cfg.memory_long_term_dir`` and stripped
-    from the response so that the apply module does not try to create it as
-    a project file (the .ai-code/ directory is in exclude_patterns).
+    The memory entry is saved to ``cfg.memory_long_term_dir`` and removed
+    from the ``files`` array so that the apply module does not try to create
+    it as a project file (the .ai-code/ directory is in exclude_patterns
+    and lives in the project root, not the cwd).
 
-    Matches any source path ending with ``long-term.md`` that also contains
-    ``.ai-code`` to avoid false positives on unrelated files.
+    Matches any entry where ``action == "EDIT"`` and ``path`` ends with
+    ``long-term.md`` and contains ``.ai-code/`` to avoid false positives.
 
     Parameters
     ----------
     cfg : Config
         Resolved configuration (provides ``memory_long_term_dir`` and toggles).
     response_text : str
-        The full Claude response text potentially containing a
-        ``.ai-code/memory/long-term.md`` file block.
+        The raw Claude JSON response text.
 
     Returns
     -------
-    str
-        The response text with the memory block removed.  Unchanged if no
-        memory block was found or if memory updates are disabled.
+    dict
+        The parsed JSON response with the memory entry removed from the
+        ``files`` array.  If parsing fails, returns ``{"files": []}``.
     """
+    from lib.validation import parse_response_json, ResponseParseError
+
+    # ── Parse JSON response ──────────────────────────────────────────────
+    try:
+        parsed = parse_response_json(response_text)
+    except ResponseParseError as e:
+        warn(f"[memory] Failed to parse response JSON: {e}")
+        return {"files": []}
+
+    # When memory updates are disabled, return parsed dict unchanged —
+    # no extraction or removal needed.
     if not cfg.memory_enabled or not cfg.memory_long_term_enabled or not cfg.memory_auto_update:
-        return response_text
+        return parsed
 
-    # Lazy import to avoid circular dependency — validation imports are
-    # lightweight and only needed here.
-    from lib.validation import block_pattern
+    # ── Search for the memory entry in the files array ───────────────────
+    memory_index = None
+    for idx, entry in enumerate(parsed["files"]):
+        if entry.get("action") != "EDIT":
+            continue
+        raw_path = entry.get("path", "")
+        norm_path = raw_path.replace("\\", "/")
+        if norm_path.endswith(_LONG_TERM_FILENAME) and ".ai-code/" in norm_path:
+            memory_index = idx
+            break
 
-    for m in block_pattern.finditer(response_text):
-        source_path = m.group("source").strip()
+    if memory_index is not None:
+        memory_entry = parsed["files"][memory_index]
+        content = memory_entry.get("content", "").strip()
 
-        # Match any path ending with the long-term memory filename that
-        # also includes the .ai-code path segment, e.g.:
-        #   "./.ai-code/memory/long-term.md"
-        #   "../.ai-code/memory/long-term.md"
-        #   ".ai-code/memory/long-term.md"
-        norm_source = source_path.replace("\\", "/")
-        if norm_source.endswith(_LONG_TERM_FILENAME) and ".ai-code/" in norm_source:
-            content = m.group("content").strip()
+        if content:
+            save_long_term_memory(cfg.memory_long_term_dir, content)
+            print(f"[memory] ✓ Long-term memory extracted and saved ({len(content)} chars)")
+        else:
+            warn("[memory] Memory entry found but content was empty — skipping save.")
 
-            if content:
-                save_long_term_memory(cfg.memory_long_term_dir, content)
-                print(f"[memory] ✓ Long-term memory extracted and saved ({len(content)} chars)")
-            else:
-                warn("[memory] Memory block found but content was empty — skipping save.")
+        # Remove the memory entry so downstream apply never sees it.
+        parsed["files"] = [
+            entry for i, entry in enumerate(parsed["files"])
+            if i != memory_index
+        ]
+    else:
+        # No memory entry found — not an error; Claude may have chosen
+        # not to output one (e.g. for very small changes).
+        warn("[memory] No .ai-code/memory/long-term.md entry found in response — memory not updated.")
 
-            # Remove the memory block from the response.  Use match span
-            # positions for precise excision rather than string replacement,
-            # which could match incorrectly if similar text appears elsewhere.
-            cleaned = response_text[:m.start()] + response_text[m.end():]
-            return cleaned
-
-    # No memory block found — this is not an error; Claude may have chosen
-    # not to output one (e.g. for very small changes).  Log for visibility.
-    warn("[memory] No .ai-code/memory/long-term.md block found in response — memory not updated.")
-    return response_text
+    return parsed

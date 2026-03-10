@@ -9,10 +9,11 @@ Public API:
         optionally apply → export artifacts.
 
 Memory updates are performed **inline**: the prompt includes instructions
-for Claude to output a ``.ai-code/long-term.md`` file block alongside
-regular code blocks.  After receiving the response, the memory block is
-extracted, saved to disk, and stripped from the response before file
-application.  This eliminates separate API calls for memory updates.
+for Claude to include an EDIT entry for ``.ai-code/long-term.md`` in the
+JSON ``files`` array alongside regular code entries.  After receiving the
+response, the memory entry is extracted, saved to disk, and removed from
+the parsed dict before file application.  This eliminates separate API
+calls for memory updates.
 
 Exports ``userfullprompt.md`` using ``build_readable_prompt_export()`` so
 the artifact exactly represents what Claude receives (system prompt + all
@@ -61,10 +62,11 @@ def execute_prompt(
     loaded and injected into the prompt based on ``cfg`` memory settings.
 
     When ``cfg.memory_auto_update`` is True, inline memory update
-    instructions are appended to the prompt so Claude outputs an updated
-    ``.ai-code/long-term.md`` block alongside code blocks.  After response,
-    the memory block is extracted, saved, and stripped before applying
-    code changes to disk.  No separate API calls are made for memory.
+    instructions are appended to the prompt so Claude includes an EDIT
+    entry for ``.ai-code/long-term.md`` in its JSON ``files`` array
+    alongside code entries.  After response, the memory entry is
+    extracted, saved, and removed before applying code changes to disk.
+    No separate API calls are made for memory.
 
     Web search is forwarded from ``cfg.websearch`` to ``prompt_claude()``,
     allowing Claude to search the web during generation when enabled.
@@ -105,7 +107,7 @@ def execute_prompt(
     -------
     dict
         ``status``              — ``"ok"`` | ``"error"`` | ``"no_response"``
-        ``response``            — Claude's text response (memory block stripped)
+        ``response``            — Claude's raw text response (for export/display)
         ``thinking``            — thinking content (if extended thinking enabled)
         ``validation_ok``       — bool, whether validation passed
         ``files_applied``       — bool, whether file edits were applied
@@ -154,11 +156,12 @@ def execute_prompt(
               f"Git={memory_result.git_history_tokens})")
 
     # ── 3c. Append inline memory update instructions to prompt ───────────────
-    # When enabled, this tells Claude to output an updated .ai-code/long-term.md
-    # block alongside its regular file output.  Claude already has the existing
-    # memory from the [MEMORY START] context block and all source files in the
-    # prompt, so it can produce an accurate update in the same API call —
-    # eliminating the need for separate memory update API calls.
+    # When enabled, this tells Claude to include an EDIT entry for
+    # .ai-code/long-term.md in its JSON files array alongside its regular
+    # file output.  Claude already has the existing memory from the
+    # [MEMORY START] context block and all source files in the prompt, so
+    # it can produce an accurate update in the same API call — eliminating
+    # the need for separate memory update API calls.
     memory_instructions = build_memory_update_instructions(cfg)
     full_prompt = prompt + memory_instructions if memory_instructions else prompt
     if memory_instructions:
@@ -252,7 +255,7 @@ def execute_prompt(
         )
 
     # ── 7b. Export full response (before memory extraction) ──────────────────
-    # Export the complete response including the memory block for debugging.
+    # Export the complete response including the memory entry for debugging.
     # This happens before extraction so the artifact captures everything
     # Claude returned.
     if data_response:
@@ -270,17 +273,17 @@ def execute_prompt(
         print(f"[Saved {len(result['raw_data'])} raw events to file]")
 
     # ── 8. Extract and save memory from response ─────────────────────────────
-    # Parse the .ai-code/long-term.md block from the response, save it to
-    # cfg.memory_long_term_dir, and strip it from the response.  This prevents
-    # the apply module from trying to create it as a project file (.ai-code/
-    # is in exclude_patterns and lives in the project root, not the cwd).
-    data_response = extract_and_save_memory_from_response(cfg, data_response)
+    # Parse the JSON response, find the .ai-code/long-term.md entry in the
+    # files array, save it to cfg.memory_long_term_dir, and remove it from
+    # the parsed dict.  Returns the modified parsed dict so downstream
+    # claude_data_to_file never sees the memory entry.
+    parsed_response = extract_and_save_memory_from_response(cfg, data_response)
 
     # ── 9. Apply to disk ─────────────────────────────────────────────────────
     files_applied = False
     if apply_to_disk:
         print("\nApplying Claude's response to disk...")
-        claude_data_to_file(data_response, original_abs_paths, patch_enabled=cfg.patch_enabled)
+        claude_data_to_file(parsed_response, original_abs_paths, patch_enabled=cfg.patch_enabled)
         files_applied = True
 
     return {
