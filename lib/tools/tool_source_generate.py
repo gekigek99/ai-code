@@ -33,7 +33,7 @@ from lib.memory import build_memory_block
 from lib.token_tracker import compute_and_display_breakdown
 from lib.prompt_builder import generate_prompt_for_gen_source, build_readable_prompt_export
 from lib.providers.claude import prompt_claude
-from lib.validation import block_pattern, validate_claude_response
+from lib.validation import parse_response_json, validate_claude_response, ResponseParseError
 
 
 def generate_source(
@@ -212,26 +212,38 @@ def generate_source(
         )
         export_md_file(raw_data_str, "gen-source-rawdata.md", output_dir)
 
-    # ── Extract source.md block and parse YAML ───────────────────────────────
-    source_yaml = ""
-    source_list: List[str] = []
-
-    for m in block_pattern.finditer(data_response):
-        source_path = m.group("source").strip()
-        content = m.group("content").strip()
-        if "source.md" in source_path:
-            source_yaml = content
-            break
-
-    if not source_yaml:
-        print("[tool_source_generate] WARNING: No source.md block found in response")
+    # ── Extract source.md entry from parsed JSON files array ─────────────────
+    try:
+        parsed_response = parse_response_json(data_response)
+    except ResponseParseError as e:
+        print(f"[tool_source_generate] ERROR: {e}")
         return {
             "status": "error",
             "source_list": [],
             "source_yaml": "",
             "raw_response": data_response,
             "thinking": thinking_content,
-            "error": "No source.md block found in Claude response",
+            "error": f"Failed to parse JSON response: {e}",
+        }
+
+    source_yaml = ""
+    source_list: List[str] = []
+
+    for entry in parsed_response.get("files", []):
+        path = entry.get("path", "")
+        if "source.md" in path and entry.get("action") == "EDIT":
+            source_yaml = entry.get("content", "").strip()
+            break
+
+    if not source_yaml:
+        print("[tool_source_generate] WARNING: No source.md entry found in response")
+        return {
+            "status": "error",
+            "source_list": [],
+            "source_yaml": "",
+            "raw_response": data_response,
+            "thinking": thinking_content,
+            "error": "No source.md entry found in Claude response",
         }
 
     # Parse the YAML to extract the source list
