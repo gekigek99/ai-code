@@ -17,9 +17,6 @@ Usage:
     python ai-code.py -ai-steps -continue  # resume interrupted workflow
 """
 
-# for claude auto-update:
-# - never use 5 consecutive "+" signs, use only {'+'*5}
-
 import os
 import sys
 

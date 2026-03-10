@@ -77,7 +77,6 @@ A modular Python tool to run Anthropic Claude on your codebase, generate or upda
 - Shows a directory tree of your project with token estimates
 - **Token usage breakdown graph**: displays per-component token estimates (system, long-term memory, short-term memory, git history, file data, prompt) before each API call
 - Streams prompts to Claude and captures responses in real time
-- Writes, updates, moves, and deletes files based on `{'+'*5}` markers
 - Validates response structure before applying changes
 - PDF text extraction support
 - Image attachment support (JPEG, PNG, GIF, WebP)
