@@ -20,88 +20,97 @@ import yaml
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# File-output-pattern suffix appended to the user-provided system prompt.
-# This tells the LLM how to format file edits in its response so that the
-# apply module can parse them reliably.
-#
-# Block format:
-#   {'+'*5} ./path/to/file.ext [TAG]    ← header: opening marker + path + tag
-#   <file contents or hunks>            ← body
-#   {'+'*5}                             ← closing marker (standalone line)
+# JSON output suffix — instructs Claude to respond with structured JSON
+# containing file operations instead of free-form text.
 # ──────────────────────────────────────────────────────────────────────────────
-def _build_suffix_without_patch() -> str:
-    """Return the file-output-pattern suffix with PATCH instructions removed.
 
-    Used when PATCH_ENABLED is false so Claude never sees the SEARCH/REPLACE
-    syntax and always outputs full file rewrites via [EDIT].
+def _build_json_output_suffix(patch_enabled: bool) -> str:
+    """Return the system prompt suffix that instructs Claude to output JSON.
+
+    When *patch_enabled* is False the PATCH action and all its rules are
+    omitted entirely so Claude never attempts partial-file edits.
     """
-    marker = "+" * 5
+
+    # -- PATCH action definition (conditional) -----------------------------
+    patch_action_block = ""
+    if patch_enabled:
+        patch_action_block = """
+- **PATCH**: Make small, targeted changes to an existing file. Requires a `patches` array (no `content` key). Each object in the array has:
+  - `"comment"`: human-readable explanation of what this hunk changes.
+  - `"find"`: exact text to locate in the file (must match exactly, including indentation and whitespace).
+  - `"replace"`: replacement text (may be empty string `""` to delete the matched text)."""
+
+    # -- PATCH rules (conditional) -----------------------------------------
+    patch_rules_block = ""
+    if patch_enabled:
+        patch_rules_block = """
+### PATCH rules
+- Every `find` string must match EXACTLY in the target file. If it does not match, you have made an error.
+- Each patch replaces the first occurrence found.
+- Multiple patches in one entry are applied top to bottom.
+- Use PATCH when changing less than ~40% of a file. Use EDIT for new files or major rewrites.
+- An empty `replace` string deletes the matched text."""
+
+    # -- PATCH schema example (conditional) --------------------------------
+    patch_schema_example = ""
+    if patch_enabled:
+        patch_schema_example = """,
+    {
+      "action": "PATCH",
+      "path": "./relative/path/to/existing.ext",
+      "patches": [
+        {
+          "comment": "describe what this hunk changes",
+          "find": "exact text to find",
+          "replace": "replacement text"
+        }
+      ]
+    }"""
+
     return f"""
 
-# ----- file output patterns ----- #
+# ----- JSON output format ----- #
 
-If you want to create a NEW file or COMPLETELY REWRITE an existing file, return the full file content:
-{marker} ./path/to/file.ext [EDIT]
-  <complete contents of the file>
-{marker}
+Your COMPLETE response must be a single valid JSON object. Do not include any text, explanation, markdown, or code fences outside the JSON.
 
-If you want to move or rename a file:
-{marker} ./path/to/old/file.ext [MOVE] ./path/to/new/file.ext
-  (no content needed)
-{marker}
+## Schema
 
-If a file should be deleted:
-{marker} ./path/to/file.ext [DELETE]
-  (no content needed)
-{marker}
+```
+{{
+  "files": [
+    {{
+      "action": "EDIT",
+      "path": "./relative/path/to/file.ext",
+      "content": "full file content as a JSON string"
+    }},
+    {{
+      "action": "DELETE",
+      "path": "./relative/path/to/file.ext"
+    }},
+    {{
+      "action": "MOVE",
+      "path": "./relative/path/to/old.ext",
+      "destination": "./relative/path/to/new.ext"
+    }}{patch_schema_example}
+  ]
+}}
+```
 
-Do not use  ``` blocks.
-Output only updated, new, or deleted files.
+## Action definitions
+
+- **EDIT**: Create a new file or completely rewrite an existing file. `content` is required and contains the full file contents. All special characters (newlines, quotes, backslashes, tabs) must be properly JSON-escaped.
+- **DELETE**: Remove a file. Only `action` and `path` required. No `content`, no `patches`.
+- **MOVE**: Move or rename a file. Requires `path` (source) and `destination` (target). No `content`, no `patches`.{patch_action_block}
+{patch_rules_block}
+
+## JSON string escaping
+
+All string values in the JSON must be valid JSON strings. Escape newlines as \\n, tabs as \\t, double quotes as \\", and backslashes as \\\\. Do not use actual newline characters inside JSON string values — use the \\n escape sequence.
+
+## Output constraint
+
+Output ONLY the JSON object. No markdown, no code fences, no explanatory text before or after the JSON.
 """
-
-
-_FILE_OUTPUT_PATTERN_SUFFIX = """
-
-# ----- file output patterns ----- #
-
-If you want to create a NEW file or COMPLETELY REWRITE an existing file, return the full file content:
-{marker} ./path/to/file.ext [EDIT]
-  <complete contents of the file>
-{marker}
-
-If you want to make SMALL, TARGETED changes to an existing file (fixing a few lines, adding a function, updating an import), use SEARCH/REPLACE hunks:
-{marker} ./path/to/file.ext [PATCH]
-{markersearch} SEARCH
-exact existing lines to find
-=======
-replacement lines
-{markerreplace} REPLACE
-{marker}
-
-PATCH rules:
-- SEARCH section must EXACTLY match existing file content (including indentation and whitespace).
-- Each SEARCH/REPLACE hunk replaces the first occurrence found.
-- Multiple hunks can appear in one PATCH block — they are applied top to bottom.
-- Use PATCH when changing less than ~40% of a file. Use EDIT for new files or major rewrites.
-- An empty REPLACE section (nothing between ======= and >>>>>>> REPLACE) deletes the matched text.
-
-If you want to move or rename a file:
-{marker} ./path/to/old/file.ext [MOVE] ./path/to/new/file.ext
-  (no content needed)
-{marker}
-
-If a file should be deleted:
-{marker} ./path/to/file.ext [DELETE]
-  (no content needed)
-{marker}
-
-Do not use  ``` blocks.
-Output only updated, new, or deleted files.
-""".format(
-    marker="+" * 5,
-    markersearch="<" * 7,
-    markerreplace=">" * 7
-)
 
 
 def _sanitize_string_list(raw_list) -> List[str]:
@@ -142,7 +151,7 @@ class Config:
     tree_dirs: List[str]
     exclude_patterns: List[str]
     prompt: str
-    system: str  # Full system prompt with file-output-pattern suffix appended
+    system: str  # Full system prompt with JSON output suffix appended
 
     # ── Anthropic / Claude ───────────────────────────────────────────────────
     anthropic_api_key: str
@@ -152,7 +161,7 @@ class Config:
     anthropic_temperature: float
 
     # ── Features ─────────────────────────────────────────────────────────────
-    patch_enabled: bool           # Allow SEARCH/REPLACE PATCH blocks
+    patch_enabled: bool           # Allow PATCH action in JSON responses
 
     # ── Web search ───────────────────────────────────────────────────────────
     websearch: bool
@@ -220,18 +229,14 @@ def load_config(script_dir: str) -> Config:
 
     # Always exclude the .ai-code directory from source context — memory files
     # have their own dedicated injection path and must never be bundled as
-    # regular source code.  The long-term memory directory lives at
-    # <parent_of_script_dir>/.ai-code/memory/ so that memory files are tracked
-    # in the master project's git history rather than the ai-code submodule.
+    # regular source code.
     if ".ai-code/" not in exclude_patterns:
         exclude_patterns.append(".ai-code/")
 
-    # Build the full system prompt by appending the file-output-pattern suffix.
-    # When PATCH is disabled, strip the PATCH section from the suffix so Claude
-    # never sees the instruction and won't attempt SEARCH/REPLACE blocks.
+    # Build the full system prompt by appending the JSON output suffix.
     raw_system = raw.get("system") or ""
     patch_enabled = raw.get("PATCH_ENABLED") or ""
-    suffix = _FILE_OUTPUT_PATTERN_SUFFIX if patch_enabled else _build_suffix_without_patch()
+    suffix = _build_json_output_suffix(bool(patch_enabled))
     system = raw_system + suffix
 
     # ── Anthropic settings ───────────────────────────────────────────────────
@@ -273,20 +278,12 @@ def load_config(script_dir: str) -> Config:
 
     # Long-term memory directory: lives in the *parent* project at
     # .ai-code/memory/ so that memory files are version-controlled alongside
-    # the master project's source code rather than buried inside the ai-code
-    # submodule.  The extra memory/ subdirectory keeps the .ai-code/ root
-    # clean for future non-memory config files.
-    #   script_dir           = /project/ai-code/
-    #   memory_long_term_dir = /project/.ai-code/memory/
+    # the master project's source code.
     memory_long_term_dir = os.path.join(script_dir, "..", ".ai-code", "memory")
     memory_long_term_dir = os.path.normpath(memory_long_term_dir)
 
     # Short-term memory directory: lives inside the script directory at memory/
-    # because it is ephemeral workflow state (ai-steps context) that should not
-    # pollute the master project's root.  It is gitignored or excluded from
-    # source context to avoid being sent as regular source data.
-    #   script_dir           = /project/ai-code/
-    #   memory_short_term_dir = /project/ai-code/memory/
+    # because it is ephemeral workflow state (ai-steps context).
     memory_short_term_dir = os.path.join(script_dir, "memory")
     memory_short_term_dir = os.path.normpath(memory_short_term_dir)
 
