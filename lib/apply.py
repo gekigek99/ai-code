@@ -1,61 +1,70 @@
 """
-lib.apply — apply file operations (write, move, delete, patch) from parsed response blocks.
+lib.apply — apply file operations (write, move, delete, patch) from parsed JSON response.
 
 Public API:
-    claude_data_to_file(text_data, abs_file_paths=None) -> None
-        Parse *text_data* for {'+'*5} blocks and apply each operation to disk.
+    claude_data_to_file(parsed_response, abs_file_paths=None, patch_enabled=True) -> None
+        Iterate parsed JSON file entries and apply each operation to disk.
 """
 
 import os
 import shutil
-from typing import List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
-from lib.patch import apply_patch
-from lib.validation import block_pattern
+from lib.patch import apply_patch, PatchApplicationError
 from lib.utils import COLOR_RED, COLOR_YELLOW, COLOR_BLUE, COLOR_CYAN, COLOR_GREEN, COLOR_RESET
 
 
 def claude_data_to_file(
-    text_data: str,
+    parsed_response: Dict,
     abs_file_paths: Optional[Set[str]] = None,
     patch_enabled: bool = True,
 ) -> None:
-    """Parse Claude's response for file-operation blocks and apply them to disk.
+    """Apply file operations from a parsed JSON response dict to disk.
 
     Parameters
     ----------
-    text_data : str
-        Raw response text containing ``{'+'*5}`` delimited blocks.
+    parsed_response : dict
+        Already-parsed JSON response with a ``"files"`` key containing a
+        list of file operation dicts.  Each dict has ``"action"``,
+        ``"path"``, and action-specific keys (``content``, ``destination``,
+        ``patches``).  The caller is responsible for parsing and
+        structural validation — this function only performs disk I/O.
     abs_file_paths : set[str], optional
         Normalised absolute paths of originally discovered source files.
-        Used to tag operations as "in original source" or "new/external" in
-        the detailed report.
+        Used to tag operations as "in original source" or "new/external"
+        in the detailed report.
+    patch_enabled : bool
+        When False, PATCH actions fall back to EDIT (full-file write of
+        ``content`` if present).
     """
     print("Applying changes to disk...")
 
     if abs_file_paths is None:
         abs_file_paths = set()
 
+    file_entries = parsed_response.get("files", [])
+
     files_written = 0
     files_deleted = 0
     files_moved = 0
     files_patched = 0
 
-    # (action, source, destination_or_none, existed_before, in_original)
+    # (action_tag, source, destination_or_none, existed_before, in_original)
     detailed_entries: List[Tuple[str, str, Optional[str], bool, bool]] = []
 
-    for m in block_pattern.finditer(text_data):
-        source_path = m.group("source").strip()
-        tag = (m.group("tag") or m.group("move") or "").strip()
-        destination = (m.group("dest") or "").strip()
-        content = m.group("content").strip()
+    for entry in file_entries:
+        action = entry.get("action", "")
+        source_path = entry.get("path", "")
+        destination = entry.get("destination", "")
+        content = entry.get("content", "")
+        patches = entry.get("patches", [])
 
         abs_source = os.path.normcase(os.path.abspath(source_path))
         in_original = abs_source in abs_file_paths
         existed_before = os.path.exists(source_path)
 
         # ====================== DELETE ======================
-        if tag == "DELETE":
+        if action == "DELETE":
             if existed_before:
                 try:
                     os.remove(source_path)
@@ -69,9 +78,9 @@ def claude_data_to_file(
             continue
 
         # ====================== MOVE ========================
-        if tag == "MOVE":
+        if action == "MOVE":
             if not destination:
-                print(f"Error: MOVE command for {source_path} missing destination path")
+                print(f"Error: MOVE for {source_path} missing destination")
                 detailed_entries.append(("MOVE_ERROR", source_path, None, existed_before, in_original))
                 continue
 
@@ -99,42 +108,34 @@ def claude_data_to_file(
             detailed_entries.append(("MOVE", source_path, destination, existed_before, in_original))
             continue
 
-        if tag == "PATCH":
-            success = apply_patch(source_path, content)
-            if success:
-                files_patched += 1
-                detailed_entries.append(("PATCH", source_path, None, existed_before, in_original))
-            else:
-                detailed_entries.append(("PATCH_ERROR", source_path, None, existed_before, in_original))
-            continue
         # ====================== PATCH =======================
-        if tag == "PATCH":
+        if action == "PATCH":
             if not patch_enabled:
-                # PATCH disabled — fall back to full-file write so the raw
-                # hunk content lands on disk as-is.  This is a safety net;
-                # with the feature off the system prompt never mentions PATCH,
-                # so Claude should not produce these blocks.
-                print(f"WARNING: PATCH block received but PATCH_ENABLED is false. "
-                      f"Writing raw content as full-file overwrite: {source_path}")
-                tag = ""  # fall through to the WRITE branch below
+                # PATCH disabled — fall back to full-file write if content
+                # is available, otherwise skip with error.
+                print(f"WARNING: PATCH received but patch_enabled is False. "
+                      f"Falling back to full-file write: {source_path}")
+                if not content:
+                    print(f"Error: PATCH fallback has no content for {source_path}")
+                    detailed_entries.append(("PATCH_ERROR", source_path, None, existed_before, in_original))
+                    continue
+                # Reassign action so we fall through to the EDIT/write block
+                action = "EDIT"
             else:
-                success = apply_patch(source_path, content)
-                if success:
-                    files_patched += 1
-                    detailed_entries.append(("PATCH", source_path, None, existed_before, in_original))
-                else:
+                try:
+                    success = apply_patch(source_path, patches)
+                    if success:
+                        files_patched += 1
+                        detailed_entries.append(("PATCH", source_path, None, existed_before, in_original))
+                    else:
+                        # apply_patch returned False (file I/O or parse error)
+                        detailed_entries.append(("PATCH_ERROR", source_path, None, existed_before, in_original))
+                except PatchApplicationError as e:
+                    print(f"PATCH error: {e}")
                     detailed_entries.append(("PATCH_ERROR", source_path, None, existed_before, in_original))
                 continue
-        if tag == "PATCH":
-            success = apply_patch(source_path, content)
-            if success:
-                files_patched += 1
-                detailed_entries.append(("PATCH", source_path, None, existed_before, in_original))
-            else:
-                detailed_entries.append(("PATCH_ERROR", source_path, None, existed_before, in_original))
-            continue
 
-        # ====================== WRITE (default) =============
+        # ====================== EDIT (default write) ========
         target_dir = os.path.dirname(source_path) or "."
         try:
             os.makedirs(target_dir, exist_ok=True)
@@ -156,39 +157,40 @@ def claude_data_to_file(
 
     # ====================== REPORT ==========================
     print("\nReport:")
-    print(f" {files_written} file(s) written, {files_patched} file(s) patched, {files_deleted} file(s) deleted, {files_moved} file(s) moved.")
+    print(f" {files_written} file(s) written, {files_patched} file(s) patched, "
+          f"{files_deleted} file(s) deleted, {files_moved} file(s) moved.")
 
     if detailed_entries:
         print("\nReport (detailed):")
         for entry in detailed_entries:
-            action, source, dest, existed_before, in_original = entry
+            action_tag, source, dest, existed_before, in_original = entry
 
-            if action == "DELETE":
+            if action_tag == "DELETE":
                 if in_original:
                     line = f"{COLOR_RED}{source} [DELETED]{COLOR_RESET}"
                 else:
                     line = f"{COLOR_YELLOW}{source} [DELETED - WARNING, not in source]{COLOR_RESET}"
 
-            elif action == "MOVE":
+            elif action_tag == "MOVE":
                 if in_original:
                     line = f"{COLOR_CYAN}{source} -> {dest} [MOVED]{COLOR_RESET}"
                 else:
                     line = f"{COLOR_YELLOW}{source} -> {dest} [MOVED - WARNING, source not in original]{COLOR_RESET}"
 
-            elif action == "MOVE_ERROR":
+            elif action_tag == "MOVE_ERROR":
                 dest_str = f" -> {dest}" if dest else ""
                 line = f"{COLOR_YELLOW}{source}{dest_str} [MOVE FAILED]{COLOR_RESET}"
 
-            elif action == "PATCH":
+            elif action_tag == "PATCH":
                 if in_original:
                     line = f"{COLOR_GREEN}{source} [PATCHED]{COLOR_RESET}"
                 else:
                     line = f"{COLOR_YELLOW}{source} [PATCHED - WARNING, not in source]{COLOR_RESET}"
 
-            elif action == "PATCH_ERROR":
+            elif action_tag == "PATCH_ERROR":
                 line = f"{COLOR_YELLOW}{source} [PATCH FAILED]{COLOR_RESET}"
 
-            elif action == "WRITE":
+            elif action_tag == "WRITE":
                 if not existed_before:
                     line = f"{COLOR_BLUE}{source} [NEW]{COLOR_RESET}"
                 elif in_original:
@@ -196,10 +198,10 @@ def claude_data_to_file(
                 else:
                     line = f"{COLOR_YELLOW}{source} [UPDATED - WARNING, not in source]{COLOR_RESET}"
 
-            elif action == "WRITE_ERROR":
+            elif action_tag == "WRITE_ERROR":
                 line = f"{COLOR_YELLOW}{source} [WRITE FAILED]{COLOR_RESET}"
 
             else:
-                line = f"{source} [UNKNOWN ACTION: {action}]"
+                line = f"{source} [UNKNOWN ACTION: {action_tag}]"
 
             print(f" - {line}")
