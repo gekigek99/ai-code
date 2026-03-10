@@ -83,7 +83,7 @@ def prompt_claude(
 
     messages = messages or []
 
-    # ── Build tools list ─────────────────────────────────────────────────────
+    # -- Build tools list -----------------------------------------------------
     # Web search tool is only added when explicitly enabled.  The status is
     # logged once per call (not "WEBSEARCH active!" on every call, which was
     # noisy in multi-step workflows).
@@ -103,7 +103,7 @@ def prompt_claude(
         except Exception as e:
             print(f"[warn] Could not clear recv file {recv_path}: {e}")
 
-    # ── Build common API kwargs ──────────────────────────────────────────────
+    # -- Build common API kwargs ----------------------------------------------
     api_kwargs: Dict[str, Any] = {
         "model": model,
         "max_tokens": int(max_tokens),
@@ -122,7 +122,7 @@ def prompt_claude(
     if tools:
         api_kwargs["tools"] = tools
 
-    # ── Dispatch to streaming or synchronous handler ─────────────────────────
+    # -- Dispatch to streaming or synchronous handler -------------------------
     if stream:
         return _handle_streaming(client, api_kwargs, recv_path)
     else:
@@ -249,7 +249,7 @@ def _handle_streaming(
     thinking_content = ""
     raw_data: List[Dict[str, Any]] = []
 
-    # ── Web search activity tracking ─────────────────────────────────────────
+    # -- Web search activity tracking -----------------------------------------
     # Track active tool-use content blocks by their stream index so we can
     # accumulate input_json_delta fragments and display the complete search
     # query when the block finishes (content_block_stop), rather than
@@ -350,7 +350,7 @@ def _handle_streaming(
                                 "input_json": "",
                             }
 
-                        print(f"\n\033[36m{'─' * 50}\033[0m")
+                        print(f"\n\033[36m{'-' * 50}\033[0m")
                         print(f"\033[36m[WEBSEARCH #{ws_searches_performed}] "
                               f"Claude invoking tool: {tool_name} (id={tool_id})\033[0m")
 
@@ -365,7 +365,7 @@ def _handle_streaming(
                             result_count = len(content_items)
                             ws_results_received += result_count
 
-                            print(f"\n\033[36m{'─' * 50}\033[0m")
+                            print(f"\n\033[36m{'-' * 50}\033[0m")
                             print(f"\033[36m[WEBSEARCH] Search returned "
                                   f"{result_count} result(s):\033[0m")
 
@@ -389,7 +389,7 @@ def _handle_streaming(
                                     print(f"\033[33m  [{idx + 1}] Unknown type: "
                                           f"{item_type}\033[0m")
 
-                            print(f"\033[36m{'─' * 50}\033[0m\n")
+                            print(f"\033[36m{'-' * 50}\033[0m\n")
                         else:
                             print(f"\n\033[33m[WEBSEARCH] Result block received "
                                   f"(non-list content: {type(content_items).__name__})\033[0m")
@@ -433,7 +433,7 @@ def _handle_streaming(
                         if search_query:
                             print(f"\033[36m[WEBSEARCH] Search query: "
                                   f"\033[1m{search_query}\033[0;36m\033[0m")
-                        print(f"\033[36m{'─' * 50}\033[0m")
+                        print(f"\033[36m{'-' * 50}\033[0m")
 
                 elif event.type == "message_stop":
                     break
@@ -459,7 +459,7 @@ def _handle_streaming(
             "raw_data": raw_data,
         }
 
-    # ── Web search summary ───────────────────────────────────────────────────
+    # -- Web search summary ---------------------------------------------------
     # Print a summary of all web search activity so the user can confirm
     # that searches actually happened and see the total scope at a glance.
     if ws_searches_performed > 0:
@@ -497,11 +497,11 @@ def _print_websearch_citation(entry: Dict[str, Any]) -> None:
     if len(cited_text) > 200:
         cited_text = cited_text[:200] + "..."
 
-    print(f"\n\033[36m  ╭─ CITATION ─────────────────────────\033[0m")
+    print(f"\n\033[36m  ╭- CITATION -------------------------\033[0m")
     print(f"\033[36m  │ Title : {title}\033[0m")
     print(f"\033[36m  │ URL   : {url}\033[0m")
     if cited_text:
         print(f"\033[36m  │ Text  : {cited_text}\033[0m")
     if page_age:
         print(f"\033[36m  │ Age   : {page_age}\033[0m")
-    print(f"\033[36m  ╰─────────────────────────────────────\033[0m\n")
+    print(f"\033[36m  ╰-------------------------------------\033[0m\n")

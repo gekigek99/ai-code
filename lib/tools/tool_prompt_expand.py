@@ -103,25 +103,25 @@ def expand_prompt(
 
     os.makedirs(output_dir, exist_ok=True)
 
-    # ── 1. Discover and read source files ────────────────────────────────────
+    # -- 1. Discover and read source files ------------------------------------
     files_to_ai: List[FileData] = []
     files_to_ai, _ = add_source(
         files_to_ai, source_paths, exclude_patterns,
     )
 
-    # ── 2. Build directory tree ──────────────────────────────────────────────
+    # -- 2. Build directory tree ----------------------------------------------
     _, ai_file_listing = get_directory_tree(
         tree_dirs, exclude_patterns, files_to_ai,
     )
 
-    # ── 2b. Build memory context (long-term only, no short-term for expansion)
+    # -- 2b. Build memory context (long-term only, no short-term for expansion)
     # During expand (Phase 1) no workflow has started yet so short-term memory
     # does not exist.  Long-term memory gives Claude project-wide awareness
     # (architecture, conventions, schema) which improves expansion quality.
     memory_result = build_memory_block(cfg, include_short_term=False)
     memory_block = memory_result.text
 
-    # ── 2c. Build inline memory update instructions ──────────────────────────
+    # -- 2c. Build inline memory update instructions --------------------------
     # Appended to the meta-prompt so Claude outputs an updated memory file
     # entry in the JSON files array alongside the expanded-prompt entry.
     # This keeps the project memory current whenever Claude reads source
@@ -134,7 +134,7 @@ def expand_prompt(
     if cfg.websearch:
         print(f"[tool_prompt_expand] Web search: ENABLED (max_results={cfg.websearch_max_results})")
 
-    # ── 3. Build the expand meta-prompt ──────────────────────────────────────
+    # -- 3. Build the expand meta-prompt --------------------------------------
     meta_prompt = build_expand_meta_prompt(minimal_prompt)
 
     # Append memory update instructions to the meta-prompt so they are part
@@ -142,14 +142,14 @@ def expand_prompt(
     # the memory file entry alongside the expanded-prompt.md entry.
     full_meta_prompt = meta_prompt + memory_instructions if memory_instructions else meta_prompt
 
-    # ── 4. Build message content using source files + meta-prompt ────────────
+    # -- 4. Build message content using source files + meta-prompt ------------
     # memory_block is prepended as the first content item so Claude sees
     # project context before source files and the meta-prompt.
     message_content, _ = build_message_content(
         files_to_ai, full_meta_prompt, ai_file_listing, memory_block=memory_block,
     )
 
-    # ── Display token breakdown ──────────────────────────────────────────────
+    # -- Display token breakdown ----------------------------------------------
     # user_prompt = minimal_prompt (the semantic user request)
     # tool_context = meta_prompt wrapper instructions (total meta minus embedded prompt)
     # memory_instructions tracked separately for accurate breakdown
@@ -164,14 +164,14 @@ def expand_prompt(
         memory_instructions=memory_instructions,
     )
 
-    # ── Export exactly what Claude receives ───────────────────────────────────
+    # -- Export exactly what Claude receives -----------------------------------
     # build_readable_prompt_export produces a human-readable string combining
     # system prompt + all message_content blocks in order, so the artifact
     # exactly represents what the LLM sees.
     readable_prompt = build_readable_prompt_export(cfg.system, message_content)
     export_md_file(readable_prompt, "expand-userfullprompt.md", output_dir)
 
-    # ── 5. Call Claude ───────────────────────────────────────────────────────
+    # -- 5. Call Claude -------------------------------------------------------
     # websearch and websearch_max_results are forwarded from cfg so that
     # Claude can perform web searches when enabled — applies uniformly to
     # all tool invocations within any workflow.
@@ -204,10 +204,10 @@ def expand_prompt(
     data_response = result["data_response"]
     thinking_content = result.get("thinking_content", "")
 
-    # ── 6. Validate JSON response structure ──────────────────────────────────
+    # -- 6. Validate JSON response structure ----------------------------------
     validate_claude_response(data_response)
 
-    # ── 7. Export artifacts ───────────────────────────────────────────────────
+    # -- 7. Export artifacts ---------------------------------------------------
     # Export the raw response before any parsing or memory extraction so the
     # artifact captures exactly what Claude returned — critical for debugging
     # when JSON parsing or memory extraction fails.
@@ -222,14 +222,14 @@ def expand_prompt(
         )
         export_md_file(raw_data_str, "expand-rawdata.md", output_dir)
 
-    # ── 7b. Extract and save memory from response ────────────────────────────
+    # -- 7b. Extract and save memory from response ----------------------------
     # Parse the JSON response, find the .ai-code/memory/long-term.md entry
     # in the files array, save it to cfg.memory_long_term_dir, and remove it
     # from the parsed dict.  Returns the modified parsed dict so the memory
     # entry doesn't interfere with expanded-prompt extraction below.
     parsed_response = extract_and_save_memory_from_response(cfg, data_response)
 
-    # ── 8. Extract expanded prompt from JSON files array ─────────────────────
+    # -- 8. Extract expanded prompt from JSON files array ---------------------
     # Search for an EDIT entry whose path contains "expanded-prompt".
     # The meta-prompt instructs Claude to output the expanded specification
     # as an EDIT entry for ./expanded-prompt.md in the JSON files array.

@@ -99,7 +99,7 @@ def generate_source(
 
     os.makedirs(output_dir, exist_ok=True)
 
-    # ── Build memory context block ───────────────────────────────────────────
+    # -- Build memory context block -------------------------------------------
     # Assemble long-term memory, short-term memory (if requested), and git
     # history (commit messages, titles, per-file line diffs) into a single
     # block.  This gives Claude project awareness — architecture knowledge,
@@ -122,10 +122,10 @@ def generate_source(
     if cfg.websearch:
         print(f"[tool_source_generate] Web search: ENABLED (max_results={cfg.websearch_max_results})")
 
-    # ── Build the gen-source message ─────────────────────────────────────────
+    # -- Build the gen-source message -----------------------------------------
     message_content = generate_prompt_for_gen_source(prompt, example_source, tree_str)
 
-    # ── Compute tool_context_chars ───────────────────────────────────────────
+    # -- Compute tool_context_chars -------------------------------------------
     # Tool context = total gen-source message chars minus the raw prompt and
     # tree that we already track separately.  This captures meta-instructions
     # ("REQUEST: Generate a new adapted source..."), section headers ("---
@@ -142,7 +142,7 @@ def generate_source(
     if memory_block:
         message_content.insert(0, {"type": "text", "text": memory_block})
 
-    # ── Display token breakdown ──────────────────────────────────────────────
+    # -- Display token breakdown ----------------------------------------------
     # No source file content in gen-source (only tree + prompt + memory).
     # ai_file_listing=tree_str because for gen-source the tree IS the listing.
     compute_and_display_breakdown(
@@ -154,7 +154,7 @@ def generate_source(
         tool_context_chars=tool_context_chars,
     )
 
-    # ── Export exactly what Claude receives for debugging/traceability ────────
+    # -- Export exactly what Claude receives for debugging/traceability --------
     # build_readable_prompt_export produces a human-readable string combining
     # the system prompt and all message_content blocks in order, so
     # gen-source-userfullprompt.md is an exact textual representation of what
@@ -164,7 +164,7 @@ def generate_source(
 
     print("\n[tool_source_generate] Asking Claude for relevant source list...")
 
-    # ── Call Claude ──────────────────────────────────────────────────────────
+    # -- Call Claude ----------------------------------------------------------
     # websearch and websearch_max_results are forwarded from cfg so that
     # Claude can perform web searches when enabled — applies uniformly to
     # all tool invocations within any workflow.
@@ -197,10 +197,10 @@ def generate_source(
     data_response = result["data_response"]
     thinking_content = result.get("thinking_content", "")
 
-    # ── Validate response structure ──────────────────────────────────────────
+    # -- Validate response structure ------------------------------------------
     validate_claude_response(data_response)
 
-    # ── Export artifacts ─────────────────────────────────────────────────────
+    # -- Export artifacts -----------------------------------------------------
     if data_response:
         export_md_file(data_response, "gen-source-clauderesponse.md", output_dir)
     if thinking_content:
@@ -212,7 +212,7 @@ def generate_source(
         )
         export_md_file(raw_data_str, "gen-source-rawdata.md", output_dir)
 
-    # ── Extract source.md entry from parsed JSON files array ─────────────────
+    # -- Extract source.md entry from parsed JSON files array -----------------
     try:
         parsed_response = parse_response_json(data_response)
     except ResponseParseError as e:

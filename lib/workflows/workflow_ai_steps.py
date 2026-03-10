@@ -482,7 +482,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
     """
     continue_mode = getattr(args, "continue_steps", False)
 
-    # ── Pre-flight checks ────────────────────────────────────────────────────
+    # -- Pre-flight checks ----------------------------------------------------
     if not is_git_available():
         print("ERROR: git is required for the -ai-steps workflow but is not available.")
         print("Please install git or ensure it is in your PATH.")
@@ -495,7 +495,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
     # Base output directory for all ai-steps artifacts
     steps_output_dir = os.path.join(cfg.claude_output_dir, "ai-steps")
 
-    # ── Previous workflow cleanup (fresh runs only) ──────────────────────────
+    # -- Previous workflow cleanup (fresh runs only) --------------------------
     # When starting a fresh workflow (no -continue), check if artifacts from
     # a previous run exist.  If so, show a summary and ask the user to
     # confirm deletion before proceeding.  This ensures no accidental data
@@ -510,7 +510,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
 
     os.makedirs(steps_output_dir, exist_ok=True)
 
-    # ── State initialisation ─────────────────────────────────────────────────
+    # -- State initialisation -------------------------------------------------
     # These variables track workflow progress and are populated either from
     # a fresh run or from a saved state file when resuming.
     expanded_prompt_text: Optional[str] = None
@@ -520,7 +520,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
     skipped_steps_set: Set[int] = set()
     prompt_hash = _compute_prompt_hash(cfg.prompt)
 
-    # ── Handle -continue: load saved state ───────────────────────────────────
+    # -- Handle -continue: load saved state -----------------------------------
     if continue_mode:
         saved_state = _load_workflow_state(steps_output_dir)
 
@@ -563,14 +563,14 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
                     print("ERROR: Failed to revert uncommitted changes. Please resolve manually.")
                     sys.exit(1)
 
-    # ── Non-continue mode: require clean working tree ────────────────────────
+    # -- Non-continue mode: require clean working tree ------------------------
     if not continue_mode:
         if has_uncommitted_changes(ignore_dir_name=cfg.script_dir_name):
             print("ERROR: The -ai-steps workflow requires a clean git working tree.")
             print("Please commit or stash all changes before running -ai-steps.")
             sys.exit(1)
 
-    # ── Show workflow configuration ──────────────────────────────────────────
+    # -- Show workflow configuration ------------------------------------------
     # Display all relevant settings upfront so the user knows what's active
     # for the entire multi-step workflow.  Web search status is especially
     # important since it applies to all API calls (source gen, expand,
@@ -590,9 +590,9 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
     # PHASE 1: PROMPT EXPANSION
     # ═════════════════════════════════════════════════════════════════════════
     if expanded_prompt_text is None:
-        print(f"\n{COLOR_CYAN}{'─' * 60}")
+        print(f"\n{COLOR_CYAN}{'-' * 60}")
         print(f"  PHASE 1: PROMPT EXPANSION")
-        print(f"{'─' * 60}{COLOR_RESET}\n")
+        print(f"{'-' * 60}{COLOR_RESET}\n")
 
         phase1_dir = os.path.join(steps_output_dir, "phase1-expand")
         os.makedirs(phase1_dir, exist_ok=True)
@@ -670,17 +670,17 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
             phase_status={"expand": "Complete", "stepize": "Pending", "execute": "Pending"},
         )
     else:
-        print(f"\n{COLOR_CYAN}{'─' * 60}")
+        print(f"\n{COLOR_CYAN}{'-' * 60}")
         print(f"  PHASE 1: PROMPT EXPANSION — SKIPPED (loaded from state)")
-        print(f"{'─' * 60}{COLOR_RESET}\n")
+        print(f"{'-' * 60}{COLOR_RESET}\n")
 
     # ═════════════════════════════════════════════════════════════════════════
     # PHASE 2: STEP DECOMPOSITION
     # ═════════════════════════════════════════════════════════════════════════
     if steps is None:
-        print(f"\n{COLOR_CYAN}{'─' * 60}")
+        print(f"\n{COLOR_CYAN}{'-' * 60}")
         print(f"  PHASE 2: STEP DECOMPOSITION")
-        print(f"{'─' * 60}{COLOR_RESET}\n")
+        print(f"{'-' * 60}{COLOR_RESET}\n")
 
         phase2_dir = os.path.join(steps_output_dir, "phase2-stepize")
         os.makedirs(phase2_dir, exist_ok=True)
@@ -764,10 +764,10 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
             phase_status={"expand": "Complete", "stepize": "Complete", "execute": "Starting"},
         )
     else:
-        print(f"\n{COLOR_CYAN}{'─' * 60}")
+        print(f"\n{COLOR_CYAN}{'-' * 60}")
         print(f"  PHASE 2: STEP DECOMPOSITION — SKIPPED (loaded from state)")
         print(f"  Feature: {feature_title}")
-        print(f"{'─' * 60}{COLOR_RESET}\n")
+        print(f"{'-' * 60}{COLOR_RESET}\n")
 
     # ═════════════════════════════════════════════════════════════════════════
     # PHASE 3: STEP EXECUTION LOOP
@@ -776,14 +776,14 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
     completed_count = len(completed_steps_set)
     skipped_count = len(skipped_steps_set)
 
-    print(f"\n{COLOR_CYAN}{'─' * 60}")
+    print(f"\n{COLOR_CYAN}{'-' * 60}")
     print(f"  PHASE 3: STEP EXECUTION ({total_steps} steps total)")
     print(f"  Feature: {feature_title}")
     print(f"  Web search: {_websearch_status_str(cfg)}")
     if completed_count or skipped_count:
         print(f"  Resuming: {completed_count} completed, {skipped_count} skipped, "
               f"{total_steps - completed_count - skipped_count} remaining")
-    print(f"{'─' * 60}{COLOR_RESET}\n")
+    print(f"{'-' * 60}{COLOR_RESET}\n")
 
     for step in steps:
         step_number = step["number"]
@@ -792,7 +792,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
         step_prompt = step["prompt"]
         step_source = step.get("source", cfg.source)
 
-        # ── Skip already-processed steps (from -continue) ───────────────────
+        # -- Skip already-processed steps (from -continue) -------------------
         if step_number in completed_steps_set:
             print(f"{COLOR_CYAN}[Step {step_number}/{total_steps}] "
                   f"SKIPPED (already completed): {step_title}{COLOR_RESET}")
@@ -803,7 +803,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
                   f"SKIPPED (previously skipped): {step_title}{COLOR_RESET}")
             continue
 
-        # ── Step execution ───────────────────────────────────────────────────
+        # -- Step execution ---------------------------------------------------
         step_dir = os.path.join(steps_output_dir, f"step-{step_number}")
         os.makedirs(step_dir, exist_ok=True)
 
@@ -818,7 +818,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
         retry_count = 0
 
         while True:
-            # ── 3.1 Generate fresh source for this step ─────────────────────
+            # -- 3.1 Generate fresh source for this step ---------------------
             # Rebuild tree because previous steps may have changed files.
             # include_short_term_memory=True: during step execution, short-term
             # memory contains the full step list, progress markers, and current
@@ -844,7 +844,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
                 exec_source_paths = step_source_result["source_list"]
                 print(f"{prefix} Source list: {len(exec_source_paths)} entries")
 
-            # ── 3.2 Execute the step ────────────────────────────────────────
+            # -- 3.2 Execute the step ----------------------------------------
             # Update short-term memory with current step context so Claude
             # knows which step it is executing, what has been completed, and
             # the overall mission — providing big-picture awareness for each
@@ -956,7 +956,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
                     }, steps_output_dir)
                     break
 
-            # ── 3.3 Ask user to confirm ─────────────────────────────────────
+            # -- 3.3 Ask user to confirm -------------------------------------
             user_result = confirm_step(step_number, step_title)
 
             if user_result["action"] == "continue":
@@ -1060,7 +1060,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
                 log_prompt(cfg.prompt, cfg.logs_dir)
                 return
 
-    # ── Final summary ────────────────────────────────────────────────────────
+    # -- Final summary --------------------------------------------------------
     _print_summary(completed_count, skipped_count, total_steps)
     log_prompt(cfg.prompt, cfg.logs_dir)
 
@@ -1076,7 +1076,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
         "skipped_steps": sorted(skipped_steps_set),
     }, steps_output_dir)
 
-    # ── Artifact retention ───────────────────────────────────────────────────
+    # -- Artifact retention ---------------------------------------------------
     # All workflow artifacts (state file, logs, steps.yaml, short-term memory)
     # are intentionally preserved after completion.  This allows the user to:
     #   - Review the full execution history and AI responses

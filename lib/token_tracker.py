@@ -87,7 +87,7 @@ class TokenBreakdown:
         ]
 
 
-# ── Bar chart configuration ──────────────────────────────────────────────────
+# -- Bar chart configuration --------------------------------------------------
 _BAR_WIDTH = 25       # Number of characters for the bar
 _BAR_FILLED = "█"
 _BAR_EMPTY = " "

@@ -49,11 +49,11 @@ from lib.config import Config
 from lib.git import get_recent_commits
 from lib.utils import warn
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 # Constants — canonical filenames.
 # Every function in this module references these rather than hardcoded strings
 # so renaming is a single-line change.
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 _LONG_TERM_FILENAME = "long-term.md"
 _SHORT_TERM_FILENAME = "short-term.md"
 
@@ -210,7 +210,7 @@ def build_memory_block(cfg: Config, include_short_term: bool = False) -> MemoryB
     short_term_tokens = 0
     git_history_tokens = 0
 
-    # ── Long-term project memory ─────────────────────────────────────────────
+    # -- Long-term project memory ---------------------------------------------
     if cfg.memory_long_term_enabled:
         content = load_long_term_memory(cfg.memory_long_term_dir)
         if content:
@@ -238,7 +238,7 @@ def build_memory_block(cfg: Config, include_short_term: bool = False) -> MemoryB
             long_term_tokens = len(placeholder) // 4
         parts.append("")  # blank line separator
 
-    # ── Short-term workflow memory ───────────────────────────────────────────
+    # -- Short-term workflow memory -------------------------------------------
     if include_short_term and cfg.memory_short_term_enabled:
         content = load_short_term_memory(cfg.memory_short_term_dir)
         if content:
@@ -247,7 +247,7 @@ def build_memory_block(cfg: Config, include_short_term: bool = False) -> MemoryB
             parts.append(short_term_section)
             short_term_tokens = len(short_term_section) // 4
 
-    # ── Git history ──────────────────────────────────────────────────────────
+    # -- Git history ----------------------------------------------------------
     if cfg.memory_git_history_enabled:
         history = get_recent_commits(
             n=cfg.memory_git_history_commits,
@@ -377,7 +377,7 @@ def extract_and_save_memory_from_response(cfg: Config, response_text: str) -> di
     """
     from lib.validation import parse_response_json, ResponseParseError
 
-    # ── Parse JSON response ──────────────────────────────────────────────
+    # -- Parse JSON response ----------------------------------------------
     try:
         parsed = parse_response_json(response_text)
     except ResponseParseError as e:
@@ -389,7 +389,7 @@ def extract_and_save_memory_from_response(cfg: Config, response_text: str) -> di
     if not cfg.memory_enabled or not cfg.memory_long_term_enabled or not cfg.memory_auto_update:
         return parsed
 
-    # ── Search for the memory entry in the files array ───────────────────
+    # -- Search for the memory entry in the files array -------------------
     memory_index = None
     for idx, entry in enumerate(parsed["files"]):
         if entry.get("action") != "EDIT":

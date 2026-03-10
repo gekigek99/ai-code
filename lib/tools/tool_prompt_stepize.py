@@ -109,18 +109,18 @@ def stepize_prompt(
 
     os.makedirs(output_dir, exist_ok=True)
 
-    # ── 1. Discover and read source files ────────────────────────────────────
+    # -- 1. Discover and read source files ------------------------------------
     files_to_ai: List[FileData] = []
     files_to_ai, _ = add_source(
         files_to_ai, source_paths, exclude_patterns,
     )
 
-    # ── 2. Build directory tree ──────────────────────────────────────────────
+    # -- 2. Build directory tree ----------------------------------------------
     _, ai_file_listing = get_directory_tree(
         tree_dirs, exclude_patterns, files_to_ai,
     )
 
-    # ── 2b. Build memory context (long-term only, no short-term for stepize) ──
+    # -- 2b. Build memory context (long-term only, no short-term for stepize) --
     # During stepize (Phase 2) the expanded prompt IS the primary context —
     # short-term memory would be redundant.  Long-term memory provides Claude
     # with project-wide awareness (architecture, conventions, schema) so it can
@@ -128,7 +128,7 @@ def stepize_prompt(
     memory_result = build_memory_block(cfg, include_short_term=False)
     memory_block = memory_result.text
 
-    # ── 2c. Build inline memory update instructions ──────────────────────────
+    # -- 2c. Build inline memory update instructions --------------------------
     # Appended to the meta-prompt so Claude outputs an updated memory file
     # entry alongside the steps.yaml entry.  This keeps the project memory
     # current whenever Claude reads source files — even during non-code-writing
@@ -141,7 +141,7 @@ def stepize_prompt(
     if cfg.websearch:
         print(f"[tool_prompt_stepize] Web search: ENABLED (max_results={cfg.websearch_max_results})")
 
-    # ── 3. Build the stepize meta-prompt ─────────────────────────────────────
+    # -- 3. Build the stepize meta-prompt -------------------------------------
     meta_prompt = build_stepize_meta_prompt(expanded_prompt)
 
     # Append memory update instructions to the meta-prompt so they are part
@@ -149,14 +149,14 @@ def stepize_prompt(
     # the memory file entry alongside the steps.yaml entry.
     full_meta_prompt = meta_prompt + memory_instructions if memory_instructions else meta_prompt
 
-    # ── 4. Build message content ─────────────────────────────────────────────
+    # -- 4. Build message content ---------------------------------------------
     # memory_block is prepended as the first content item so Claude sees
     # project context before source files and the meta-prompt.
     message_content, _ = build_message_content(
         files_to_ai, full_meta_prompt, ai_file_listing, memory_block=memory_block,
     )
 
-    # ── Display token breakdown ──────────────────────────────────────────────
+    # -- Display token breakdown ----------------------------------------------
     # user_prompt = expanded_prompt (the semantic user content being decomposed)
     # tool_context = meta_prompt wrapper instructions (total meta minus embedded prompt)
     # memory_instructions tracked separately for accurate breakdown
@@ -171,14 +171,14 @@ def stepize_prompt(
         memory_instructions=memory_instructions,
     )
 
-    # ── Export exactly what Claude receives ───────────────────────────────────
+    # -- Export exactly what Claude receives -----------------------------------
     # build_readable_prompt_export produces a human-readable string combining
     # system prompt + all message_content blocks in order, so the artifact
     # exactly represents what the LLM sees.
     readable_prompt = build_readable_prompt_export(cfg.system, message_content)
     export_md_file(readable_prompt, "stepize-userfullprompt.md", output_dir)
 
-    # ── 5. Call Claude ───────────────────────────────────────────────────────
+    # -- 5. Call Claude -------------------------------------------------------
     # websearch and websearch_max_results are forwarded from cfg so that
     # Claude can perform web searches when enabled — applies uniformly to
     # all tool invocations within any workflow.
@@ -212,10 +212,10 @@ def stepize_prompt(
     data_response = result["data_response"]
     thinking_content = result.get("thinking_content", "")
 
-    # ── 6. Validate response ─────────────────────────────────────────────────
+    # -- 6. Validate response -------------------------------------------------
     validate_claude_response(data_response)
 
-    # ── 7. Export artifacts ───────────────────────────────────────────────────
+    # -- 7. Export artifacts ---------------------------------------------------
     if data_response:
         export_md_file(data_response, "stepize-clauderesponse.md", output_dir)
     if thinking_content:
@@ -227,13 +227,13 @@ def stepize_prompt(
         )
         export_md_file(raw_data_str, "stepize-rawdata.md", output_dir)
 
-    # ── 7b. Extract and save memory from response ────────────────────────────
+    # -- 7b. Extract and save memory from response ----------------------------
     # Parse JSON, extract the .ai-code/memory/long-term.md entry, save it to
     # cfg.memory_long_term_dir, and return the parsed dict with the memory
     # entry removed.  Downstream code operates on the dict, not raw text.
     parsed_response = extract_and_save_memory_from_response(cfg, data_response)
 
-    # ── 8. Extract steps.yaml from parsed JSON files array ───────────────────
+    # -- 8. Extract steps.yaml from parsed JSON files array -------------------
     steps_yaml = ""
     for entry in parsed_response.get("files", []):
         path = entry.get("path", "")

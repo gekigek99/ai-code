@@ -19,10 +19,10 @@ from typing import List
 import yaml
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 # JSON output suffix — instructs Claude to respond with structured JSON
 # containing file operations instead of free-form text.
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 
 def _build_json_output_suffix(patch_enabled: bool) -> str:
     """Return the system prompt suffix that instructs Claude to output JSON.
@@ -146,34 +146,34 @@ class Config:
     reading module-level globals.
     """
 
-    # ── Source / prompt ──────────────────────────────────────────────────────
+    # -- Source / prompt ------------------------------------------------------
     source: List[str]
     tree_dirs: List[str]
     exclude_patterns: List[str]
     prompt: str
     system: str  # Full system prompt with JSON output suffix appended
 
-    # ── Anthropic / Claude ───────────────────────────────────────────────────
+    # -- Anthropic / Claude ---------------------------------------------------
     anthropic_api_key: str
     anthropic_model: str
     anthropic_max_tokens: int
     anthropic_max_tokens_think: int
     anthropic_temperature: float
 
-    # ── Features ─────────────────────────────────────────────────────────────
+    # -- Features -------------------------------------------------------------
     patch_enabled: bool           # Allow PATCH action in JSON responses
 
-    # ── Web search ───────────────────────────────────────────────────────────
+    # -- Web search -----------------------------------------------------------
     websearch: bool
     websearch_max_results: int
 
-    # ── Paths ────────────────────────────────────────────────────────────────
+    # -- Paths ----------------------------------------------------------------
     script_dir: str           # Directory containing ai-code.py
     script_dir_name: str      # Basename of script_dir (used for git filtering)
     logs_dir: str             # <script_dir>/logs/
     claude_output_dir: str    # <script_dir>/logs/claude/
 
-    # ── Memory ───────────────────────────────────────────────────────────────
+    # -- Memory ---------------------------------------------------------------
     memory_enabled: bool              # Master toggle for entire memory system
     memory_long_term_enabled: bool    # Toggle long-term project memory
     memory_short_term_enabled: bool   # Toggle short-term ai-steps memory
@@ -215,7 +215,7 @@ def load_config(script_dir: str) -> Config:
     with open(config_path, "r", encoding="utf-8") as f:
         raw = yaml.safe_load(f)
 
-    # ── Extract top-level keys with safe defaults ────────────────────────────
+    # -- Extract top-level keys with safe defaults ----------------------------
     anthropic = raw.get("ANTHROPIC", {})
 
     # Sanitize all list-type config values to remove None entries that arise
@@ -239,7 +239,7 @@ def load_config(script_dir: str) -> Config:
     suffix = _build_json_output_suffix(bool(patch_enabled))
     system = raw_system + suffix
 
-    # ── Anthropic settings ───────────────────────────────────────────────────
+    # -- Anthropic settings ---------------------------------------------------
     anthropic_api_key = anthropic.get("API_KEY", "")
     anthropic_model = anthropic.get("CLAUDE_MODEL", "claude-sonnet-4-20250514")
     anthropic_max_tokens = int(anthropic.get("MAX_TOKENS", 4000))
@@ -249,14 +249,14 @@ def load_config(script_dir: str) -> Config:
     raw_temp = anthropic.get("TEMPERATURE")
     anthropic_temperature = float(raw_temp) if raw_temp is not None else 1.0
 
-    # ── Features ─────────────────────────────────────────────────────────────
+    # -- Features -------------------------------------------------------------
     patch_enabled = bool(raw.get("PATCH_ENABLED", True))
 
-    # ── Web search ───────────────────────────────────────────────────────────
+    # -- Web search -----------------------------------------------------------
     websearch = bool(raw.get("WEBSEARCH", False))
     websearch_max_results = int(raw.get("WEBSEARCH_MAX_RESULTS", 5))
 
-    # ── Memory ───────────────────────────────────────────────────────────────
+    # -- Memory ---------------------------------------------------------------
     # Follows the same nested-dict pattern as ANTHROPIC: grab the sub-dict
     # first, then pull individual keys with defaults.  Every key has a
     # sensible default so an entirely absent MEMORY section still yields a
@@ -271,7 +271,7 @@ def load_config(script_dir: str) -> Config:
     memory_short_term_max_tokens = int(memory.get("SHORT_TERM_MAX_TOKENS", 1000))
     memory_auto_update = bool(memory.get("AUTO_UPDATE", True))
 
-    # ── Paths ────────────────────────────────────────────────────────────────
+    # -- Paths ----------------------------------------------------------------
     script_dir_name = os.path.basename(script_dir)
     logs_dir = os.path.join(script_dir, "logs")
     claude_output_dir = os.path.join(logs_dir, "claude")

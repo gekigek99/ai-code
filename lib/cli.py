@@ -42,7 +42,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
 
-    # ── Boolean flags ────────────────────────────────────────────────────────
+    # -- Boolean flags --------------------------------------------------------
     parser.add_argument(
         "-ai",
         action="store_true",
@@ -139,7 +139,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
 
-    # ── Value-carrying flags ─────────────────────────────────────────────────
+    # -- Value-carrying flags -------------------------------------------------
     parser.add_argument(
         "-img",
         action="append",

@@ -32,7 +32,7 @@ def run_gen_source_workflow(cfg: Config, args: Namespace) -> None:
     args : Namespace
         Parsed CLI arguments.
     """
-    # ── Show workflow configuration ──────────────────────────────────────────
+    # -- Show workflow configuration ------------------------------------------
     print(f"\n{COLOR_CYAN}{'=' * 60}")
     print(f"  GEN-SOURCE WORKFLOW")
     print(f"  Model: {cfg.anthropic_model}")
@@ -41,7 +41,7 @@ def run_gen_source_workflow(cfg: Config, args: Namespace) -> None:
 
     print("Generating adapted-to-prompt source via Claude...")
 
-    # ── 1. Build the directory tree for context ──────────────────────────────
+    # -- 1. Build the directory tree for context ------------------------------
     # We need the tree to show Claude the project structure so it can decide
     # which files are relevant.  We discover source files first so the tree
     # can show token annotations.
@@ -56,7 +56,7 @@ def run_gen_source_workflow(cfg: Config, args: Namespace) -> None:
         cfg.tree_dirs, cfg.exclude_patterns, files_to_ai,
     )
 
-    # ── 2. Generate the source list ──────────────────────────────────────────
+    # -- 2. Generate the source list ------------------------------------------
     result = generate_source(
         cfg=cfg,
         prompt=cfg.prompt,
@@ -68,7 +68,7 @@ def run_gen_source_workflow(cfg: Config, args: Namespace) -> None:
         print(f"\n[workflow_gen_source] Failed: {result.get('error')}")
         return
 
-    # ── 3. Copy to clipboard ─────────────────────────────────────────────────
+    # -- 3. Copy to clipboard -------------------------------------------------
     if result["source_yaml"]:
         try:
             import pyperclip

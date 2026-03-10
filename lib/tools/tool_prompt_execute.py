@@ -127,22 +127,22 @@ def execute_prompt(
 
     os.makedirs(output_dir, exist_ok=True)
 
-    # ── 1. Prepare files_to_ai with optional images ─────────────────────────
+    # -- 1. Prepare files_to_ai with optional images -------------------------
     files_to_ai: List[FileData] = []
     if image_paths:
         files_to_ai = add_images(files_to_ai, image_paths)
 
-    # ── 2. Discover and read source files ────────────────────────────────────
+    # -- 2. Discover and read source files ------------------------------------
     files_to_ai, original_abs_paths = add_source(
         files_to_ai, source_paths, exclude_patterns, ai_shared_file_types,
     )
 
-    # ── 3. Build directory tree ──────────────────────────────────────────────
+    # -- 3. Build directory tree ----------------------------------------------
     clean_tree, ai_file_listing = get_directory_tree(
         tree_dirs, exclude_patterns, files_to_ai,
     )
 
-    # ── 3b. Build memory context block (read-only) ──────────────────────────
+    # -- 3b. Build memory context block (read-only) --------------------------
     # Assemble long-term memory, short-term memory (if requested), and git
     # history into a single block for prompt injection.  This gives Claude
     # project context before it sees any source files or the user prompt.
@@ -155,7 +155,7 @@ def execute_prompt(
               f"LT={memory_result.long_term_tokens} ST={memory_result.short_term_tokens} "
               f"Git={memory_result.git_history_tokens})")
 
-    # ── 3c. Append inline memory update instructions to prompt ───────────────
+    # -- 3c. Append inline memory update instructions to prompt ---------------
     # When enabled, this tells Claude to include an EDIT entry for
     # .ai-code/long-term.md in its JSON files array alongside its regular
     # file output.  Claude already has the existing memory from the
@@ -172,14 +172,14 @@ def execute_prompt(
     if cfg.websearch:
         print(f"[tool_prompt_execute] Web search: ENABLED (max_results={cfg.websearch_max_results})")
 
-    # ── 4. Build message content ─────────────────────────────────────────────
+    # -- 4. Build message content ---------------------------------------------
     # Pass the memory block so it is prepended as the first content item,
     # establishing project context before source files and the user prompt.
     message_content, data_files = build_message_content(
         files_to_ai, full_prompt, ai_file_listing, memory_block=memory_block,
     )
 
-    # ── Display token breakdown ──────────────────────────────────────────────
+    # -- Display token breakdown ----------------------------------------------
     compute_and_display_breakdown(
         system=cfg.system,
         memory_result=memory_result,
@@ -189,7 +189,7 @@ def execute_prompt(
         memory_instructions=memory_instructions,
     )
 
-    # ── 5. Export assembled prompt for record-keeping ────────────────────────
+    # -- 5. Export assembled prompt for record-keeping ------------------------
     # build_readable_prompt_export combines system prompt + all message_content
     # blocks into a human-readable string that exactly represents what Claude
     # receives, in the same order it sees the content.  This replaces the
@@ -197,7 +197,7 @@ def execute_prompt(
     readable_prompt = build_readable_prompt_export(cfg.system, message_content)
     export_md_file(readable_prompt, f"{label}userfullprompt.md", output_dir)
 
-    # ── 6. Call Claude ───────────────────────────────────────────────────────
+    # -- 6. Call Claude -------------------------------------------------------
     # websearch and websearch_max_results are forwarded from cfg so that
     # Claude can perform web searches when enabled — applies to all workflows
     # (ai, ai-steps, gen-source) uniformly.
@@ -244,7 +244,7 @@ def execute_prompt(
     data_response = result["data_response"]
     thinking_content = result.get("thinking_content", "")
 
-    # ── 7. Export raw artifacts FIRST ────────────────────────────────────────
+    # -- 7. Export raw artifacts FIRST ----------------------------------------
     # Export the raw response before any parsing or memory extraction so the
     # artifact captures exactly what Claude returned — critical for debugging
     # when JSON parsing or memory extraction fails.
@@ -262,7 +262,7 @@ def execute_prompt(
         export_md_file(raw_data_str, f"{label}rawdata.md", output_dir)
         print(f"[Saved {len(result['raw_data'])} raw events to file]")
 
-    # ── 8. Validate JSON structure ───────────────────────────────────────────
+    # -- 8. Validate JSON structure -------------------------------------------
     print("\n\nValidating Claude response structure...")
     validation_ok = validate_claude_response(data_response)
 
@@ -272,14 +272,14 @@ def execute_prompt(
             "Proceeding with file application if enabled, but review results carefully."
         )
 
-    # ── 9. Extract and save memory from response ─────────────────────────────
+    # -- 9. Extract and save memory from response -----------------------------
     # Parse the JSON response, find the .ai-code/long-term.md entry in the
     # files array, save it to cfg.memory_long_term_dir, and remove it from
     # the parsed dict.  Returns the modified parsed dict so downstream
     # claude_data_to_file never sees the memory entry.
     parsed_response = extract_and_save_memory_from_response(cfg, data_response)
 
-    # ── 10. Apply to disk ────────────────────────────────────────────────────
+    # -- 10. Apply to disk ----------------------------------------------------
     files_applied = False
     if apply_to_disk:
         print("\nApplying Claude's response to disk...")

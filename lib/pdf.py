@@ -60,7 +60,7 @@ def extract_text_from_pdf(path: str) -> str:
             page = pdf_document[page_num]
 
             if pdf_document.page_count > 1:
-                text_content.append(f"\n└─ Page {page_num + 1}")
+                text_content.append(f"\n└- Page {page_num + 1}")
 
             page_text = page.get_text()
             # Limit consecutive newlines for readability

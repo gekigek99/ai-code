@@ -15,17 +15,17 @@ from typing import List
 from lib.utils import COLOR_GREEN, COLOR_YELLOW, COLOR_RESET, warn
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 # Exception
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 
 class ResponseParseError(Exception):
     """Raised when Claude's JSON response cannot be parsed or is structurally invalid."""
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 # Allowed actions and their required keys beyond the universal {action, path}
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 
 _ACTION_REQUIRED_KEYS = {
     "EDIT":   {"content": str},
@@ -35,9 +35,9 @@ _ACTION_REQUIRED_KEYS = {
 }
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 # Core parser
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 
 def parse_response_json(raw_text: str) -> dict:
     """Parse and structurally validate Claude's JSON response.
@@ -47,13 +47,13 @@ def parse_response_json(raw_text: str) -> dict:
     JSON, missing keys, wrong types, unknown actions.
     """
 
-    # ── Empty / whitespace guard ─────────────────────────────────────────
+    # -- Empty / whitespace guard -----------------------------------------
     if not raw_text or not raw_text.strip():
         raise ResponseParseError("Response is empty or whitespace-only.")
 
     text = raw_text.strip()
 
-    # ── Strip optional ```json … ``` fences ──────────────────────────────
+    # -- Strip optional ```json … ``` fences ------------------------------
     if text.startswith("```json"):
         text = text[len("```json"):].lstrip("\n")
         if text.endswith("```"):
@@ -63,7 +63,7 @@ def parse_response_json(raw_text: str) -> dict:
         if text.endswith("```"):
             text = text[:-3].rstrip("\n")
 
-    # ── JSON decode ──────────────────────────────────────────────────────
+    # -- JSON decode ------------------------------------------------------
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError as exc:
@@ -77,7 +77,7 @@ def parse_response_json(raw_text: str) -> dict:
             f"Context: ...{preview!r}..."
         ) from exc
 
-    # ── Top-level structure ──────────────────────────────────────────────
+    # -- Top-level structure ----------------------------------------------
     if not isinstance(parsed, dict):
         raise ResponseParseError(
             f"Top-level JSON value must be an object (dict), got {type(parsed).__name__}."
@@ -94,7 +94,7 @@ def parse_response_json(raw_text: str) -> dict:
             f"\"files\" must be a list, got {type(files).__name__}."
         )
 
-    # ── Per-entry validation ─────────────────────────────────────────────
+    # -- Per-entry validation ---------------------------------------------
     for idx, entry in enumerate(files):
         _prefix = f"files[{idx}]"
 
@@ -146,9 +146,9 @@ def parse_response_json(raw_text: str) -> dict:
     return parsed
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 # Human-friendly validation wrapper
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 
 def validate_claude_response(text_data: str) -> bool:
     """Parse, validate, and print a summary of Claude's JSON response.

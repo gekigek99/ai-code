@@ -32,14 +32,14 @@ def run_ai_workflow(cfg: Config, args: Namespace) -> None:
     args : Namespace
         Parsed CLI arguments (needs ``force``, ``include_pdf``, ``image_paths``).
     """
-    # ── 1. Git safety check ──────────────────────────────────────────────────
+    # -- 1. Git safety check --------------------------------------------------
     if not args.force and has_uncommitted_changes(ignore_dir_name=cfg.script_dir_name):
         print("ERROR: You have uncommitted changes in your git repository.")
         print("Please commit or stash your changes before running this script.")
         print("Use -f to force execution.")
         sys.exit(1)
 
-    # ── Show workflow configuration ──────────────────────────────────────────
+    # -- Show workflow configuration ------------------------------------------
     print(f"\n{COLOR_CYAN}{'=' * 60}")
     print(f"  AI WORKFLOW")
     print(f"  Model: {cfg.anthropic_model}")
@@ -47,14 +47,14 @@ def run_ai_workflow(cfg: Config, args: Namespace) -> None:
     print(f"  Extended thinking: {'ENABLED (budget=' + str(cfg.anthropic_max_tokens_think) + ')' if cfg.anthropic_max_tokens_think > 0 else 'DISABLED'}")
     print(f"{'=' * 60}{COLOR_RESET}\n")
 
-    # ── 2. Determine file types and images ───────────────────────────────────
+    # -- 2. Determine file types and images -----------------------------------
     ai_shared_file_types: list = []
     if args.include_pdf:
         ai_shared_file_types.append("pdf")
 
     image_paths: list = args.image_paths if args.image_paths else []
 
-    # ── 3. Execute the prompt ────────────────────────────────────────────────
+    # -- 3. Execute the prompt ------------------------------------------------
     result = execute_prompt(
         cfg=cfg,
         prompt=cfg.prompt,
@@ -72,5 +72,5 @@ def run_ai_workflow(cfg: Config, args: Namespace) -> None:
     else:
         print(f"\n[workflow_ai] Error: {result.get('error')}")
 
-    # ── 4. Log prompt for history ────────────────────────────────────────────
+    # -- 4. Log prompt for history --------------------------------------------
     log_prompt(cfg.prompt, cfg.logs_dir)

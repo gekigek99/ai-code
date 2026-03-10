@@ -20,7 +20,7 @@ Usage:
 import os
 import sys
 
-# ── lib imports (explicit, per module) ───────────────────────────────────────
+# -- lib imports (explicit, per module) ---------------------------------------
 from lib.cli import build_arg_parser
 from lib.config import load_config
 from lib.files import add_source
@@ -51,22 +51,22 @@ def main() -> None:
       (none)       → dry run (inline — gather sources, build prompt, export)
     """
 
-    # ── 1. Parse CLI arguments ───────────────────────────────────────────────
+    # -- 1. Parse CLI arguments -----------------------------------------------
     parser = build_arg_parser()
     args = parser.parse_args()
 
-    # ── 1.1 Validate flag combinations ───────────────────────────────────────
+    # -- 1.1 Validate flag combinations ---------------------------------------
     # -continue is only meaningful with -ai-steps
     if args.continue_steps and not args.run_ai_steps:
         print("ERROR: -continue can only be used together with -ai-steps.")
         print("Usage: python ai-code.py -ai-steps -continue")
         sys.exit(1)
 
-    # ── 2. Load configuration ────────────────────────────────────────────────
+    # -- 2. Load configuration ------------------------------------------------
     script_dir = os.path.dirname(os.path.abspath(__file__))
     cfg = load_config(script_dir)
 
-    # ── 2.1 Apply CLI overrides to config ────────────────────────────────────
+    # -- 2.1 Apply CLI overrides to config ------------------------------------
     # The -websearch CLI flag overrides the YAML WEBSEARCH setting.
     # This allows enabling websearch for a single run without editing
     # the config file, or force-enabling it when the config has it off.
@@ -74,7 +74,7 @@ def main() -> None:
         cfg.websearch = True
         print("[config] Web search enabled via -websearch CLI flag")
 
-    # ── 3. Handle -last: re-apply saved response ────────────────────────────
+    # -- 3. Handle -last: re-apply saved response ----------------------------
     # This is a simple offline flow — no API call, no workflow needed.
     if args.run_last:
         print(f"Applying files from last Claude response ({cfg.claude_output_dir}/clauderesponse.md)...")
@@ -100,22 +100,22 @@ def main() -> None:
             print("Empty clauderesponse file.")
         return
 
-    # ── 4. Handle -gen-source: delegate to workflow ──────────────────────────
+    # -- 4. Handle -gen-source: delegate to workflow --------------------------
     if args.run_gen_source:
         run_gen_source_workflow(cfg, args)
         return
 
-    # ── 5. Handle -ai-steps: delegate to workflow ────────────────────────────
+    # -- 5. Handle -ai-steps: delegate to workflow ----------------------------
     if args.run_ai_steps:
         run_ai_steps_workflow(cfg, args)
         return
 
-    # ── 6. Handle -ai: delegate to workflow ──────────────────────────────────
+    # -- 6. Handle -ai: delegate to workflow ----------------------------------
     if args.run_ai:
         run_ai_workflow(cfg, args)
         return
 
-    # ── 7. Dry run: gather sources, build prompt, export ─────────────────────
+    # -- 7. Dry run: gather sources, build prompt, export ---------------------
     # No API call — just show what would be sent.
     ai_shared_file_types: list = []
     if args.include_pdf:
@@ -145,7 +145,7 @@ def main() -> None:
         files_to_ai, full_prompt, ai_file_listing, memory_block=memory_result.text,
     )
 
-    # ── Token breakdown for dry run (unified function) ───────────────────────
+    # -- Token breakdown for dry run (unified function) -----------------------
     compute_and_display_breakdown(
         system=cfg.system,
         memory_result=memory_result,
