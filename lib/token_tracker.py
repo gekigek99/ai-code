@@ -33,7 +33,9 @@ class TokenBreakdown:
       - long_term_memory:    Long-term project memory (.ai-code/memory/long-term.md)
       - short_term_memory:   Short-term workflow memory (ai-steps context)
       - git_history:         Recent git commit history
-      - source_files:        Content of all source files shared with the LLM
+      - source_files:        Content of text/bin source files shared with the LLM
+      - images:              Image attachments (JPEG, PNG, GIF, WebP)
+      - pdfs:                PDF document content
       - file_tree:           The project directory tree listing
       - user_prompt:         The user's prompt text (from yaml ``prompt`` field)
       - tool_context:        Tool-specific overhead — meta-instructions, example
@@ -46,7 +48,9 @@ class TokenBreakdown:
     long_term_memory: int = 0     # Long-term project memory tokens
     short_term_memory: int = 0    # Short-term workflow memory tokens
     git_history: int = 0          # Git commit history tokens
-    source_files: int = 0         # Source file content tokens
+    source_files: int = 0         # Source file content tokens (text + bin)
+    images: int = 0               # Image attachment tokens
+    pdfs: int = 0                 # PDF document tokens
     file_tree: int = 0            # Directory tree listing tokens
     user_prompt: int = 0          # User prompt from yaml tokens
     tool_context: int = 0         # Tool-specific meta-instructions / example data tokens
@@ -61,6 +65,8 @@ class TokenBreakdown:
             + self.short_term_memory
             + self.git_history
             + self.source_files
+            + self.images
+            + self.pdfs
             + self.file_tree
             + self.user_prompt
             + self.tool_context
@@ -80,6 +86,8 @@ class TokenBreakdown:
             ("Short-term Memory", self.short_term_memory),
             ("Git History", self.git_history),
             ("Source Files", self.source_files),
+            ("Images", self.images),
+            ("PDFs", self.pdfs),
             ("File Tree", self.file_tree),
             ("User Prompt", self.user_prompt),
             ("Tool Context", self.tool_context),
@@ -205,11 +213,18 @@ def compute_and_display_breakdown(
         breakdown.short_term_memory = getattr(memory_result, "short_term_tokens", 0)
         breakdown.git_history = getattr(memory_result, "git_history_tokens", 0)
 
-    # Source file content — sum of per-file token estimates for all shared files
+    # Source file content — split by file_type so images and PDFs get their
+    # own rows in the breakdown instead of being lumped into source_files.
     if files_to_ai:
-        breakdown.source_files = sum(
-            f.ai_data_tokens for f in files_to_ai if f.ai_share
-        )
+        for f in files_to_ai:
+            if not f.ai_share:
+                continue
+            if f.file_type == "image":
+                breakdown.images += f.ai_data_tokens
+            elif f.file_type == "pdf":
+                breakdown.pdfs += f.ai_data_tokens
+            else:
+                breakdown.source_files += f.ai_data_tokens
 
     # Directory tree listing
     breakdown.file_tree = len(ai_file_listing) // 4
