@@ -7,7 +7,7 @@ __pycache__/
 logs/
 
 # Config contains API keys — never commit
-ai-code-prompt.yaml
+ai-code-prompt.yaml*
 
 # Memory:
 memory/
