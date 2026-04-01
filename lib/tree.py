@@ -9,17 +9,28 @@ Public API:
     context.  The ANSI-coloured version is printed to the console; the
     returned ``clean_tree`` has ANSI codes stripped.
 
-    Token estimation uses a single method everywhere: ``file_size_bytes / 4``
-    (equivalently ``size_kb * 256``).  This provides consistent estimates
-    across all files regardless of whether their content is shared with
-    the LLM.
+    Token estimation is tailored per file type for accuracy:
+      - **PDF files**: text is extracted via PyMuPDF and tokens are estimated
+        as ``len(extracted_text) // 4``.
+      - **Image files** (JPEG, PNG, GIF, WebP): pixel dimensions are read
+        from file headers and tokens are estimated using Claude's official
+        formula ``(width * height) / 750``, with automatic downscaling to
+        1568 px max edge to match Claude's internal resizing.
+      - **All other files**: ``file_size_bytes / 4`` (equivalently
+        ``size_kb * 256``).
 """
 
 import os
 from typing import List, Optional, Set, Tuple
 
-from lib.files import FileData, is_excluded
+from lib.files import FileData, is_excluded, is_file_bin
+from lib.images import get_image_dimensions, estimate_image_tokens
+from lib.pdf import is_file_pdf, extract_text_from_pdf
 from lib.utils import COLOR_GREEN, COLOR_RESET, warn
+
+# Supported image extensions for pixel-based token estimation in the tree.
+# Matches the formats supported by Claude's vision API.
+_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 
 
 def _resolve_tree_dirs(raw_dirs: List[str]) -> List[str]:
@@ -69,10 +80,13 @@ def get_directory_tree(
 ) -> Tuple[str, str]:
     """Build a directory tree for the given *base_dirs*.
 
-    Token estimation uses a single formula for ALL files:
-    ``int(size_kb * 256)`` which approximates ``file_size_bytes / 4``.
-    This avoids inconsistencies between shared (content-read) and
-    non-shared (size-only) files while keeping estimates comparable.
+    Token estimation is per-type for accuracy:
+      - PDF: ``len(extracted_text) // 4``
+      - Image (JPEG/PNG/GIF/WebP): ``(width * height) / 750`` (max 1568 px edge)
+      - Other: ``int(size_kb * 256)`` ≈ ``file_size_bytes / 4``
+
+    If a file is already in *files_to_ai* (content was read during source
+    discovery), its ``ai_data_tokens`` is reused for consistency.
 
     Returns
     -------
@@ -89,10 +103,11 @@ def get_directory_tree(
     display_lines: List[str] = []
     clean_lines: List[str] = []
 
-    # Each entry is (relative_path, size_kb).
-    # Token estimates are always computed as int(size_kb * 256) — a single
-    # consistent method across all files.
-    ai_file_entries: List[Tuple[str, float]] = []
+    # Each entry is (relative_path, size_kb, est_tokens).
+    # Token estimates are per-type: PDF→extracted text, image→pixel dims,
+    # other→file_size/4.  If a file was already processed in files_to_ai,
+    # its ai_data_tokens is reused directly.
+    ai_file_entries: List[Tuple[str, float, int]] = []
 
     files_to_ai = files_to_ai or []
     files_to_ai_norm = {
@@ -141,15 +156,35 @@ def get_directory_tree(
                 except Exception:
                     size_kb = 0.0
 
-                # Single token estimation method for all files:
-                # tokens ≈ file_size_bytes / 4 = size_kb * 256
-                est_tokens = int(size_kb * 256)
+                # --- Per-type token estimation ---
+                # 1. If file already processed in files_to_ai, reuse its token count
+                # 2. PDF: extract text and estimate from extracted text length
+                # 3. Image: read pixel dimensions, use (w*h)/750
+                # 4. Other: file_size_bytes / 4
+                norm_abs = os.path.normcase(os.path.abspath(abs_path))
+                if norm_abs in files_to_ai_norm:
+                    est_tokens = files_to_ai_norm[norm_abs].ai_data_tokens
+                else:
+                    ext_lower = os.path.splitext(abs_path)[1].lower()
+                    if ext_lower == ".pdf" and is_file_pdf(abs_path):
+                        try:
+                            pdf_text = extract_text_from_pdf(abs_path)
+                            est_tokens = max(1, len(pdf_text) // 4)
+                        except Exception:
+                            est_tokens = int(size_kb * 256)  # fallback
+                    elif ext_lower in _IMAGE_EXTENSIONS:
+                        dims = get_image_dimensions(abs_path)
+                        if dims is not None:
+                            est_tokens = estimate_image_tokens(dims[0], dims[1])
+                        else:
+                            est_tokens = int(size_kb * 256)  # fallback
+                    else:
+                        est_tokens = int(size_kb * 256)
 
                 # Collect for AI file listing — every discovered file gets
-                # an entry with size and token estimate, regardless of whether
-                # it is shared with the LLM.
+                # an entry with size and token estimate.
                 rel_to_root = "./" + os.path.relpath(abs_path, project_root).replace("\\", "/")
-                ai_file_entries.append((rel_to_root, size_kb))
+                ai_file_entries.append((rel_to_root, size_kb, est_tokens))
 
                 pad = base_name.ljust(20)[len(base_name):]
                 token_str = f"~{est_tokens:5} tokens"
@@ -217,13 +252,11 @@ def get_directory_tree(
     # Clean tree for export (no ANSI)
     clean_tree = "\n".join(clean_lines)
 
-    # Flat AI file listing with file size (KB) and token estimates for ALL
-    # discovered files.  Uses a single estimation method: size_kb * 256
-    # (≈ file_size_bytes / 4) so every file's token cost is computed the
-    # same way — no split between shared and non-shared files.
+    # Flat AI file listing with file size (KB) and per-type token estimates
+    # for ALL discovered files.  Token estimates are computed per file type
+    # (PDF→extracted text, image→pixel dims, other→file_size/4) for accuracy.
     ai_listing_parts = ["Project file structure:"]
-    for file_path, size_kb in ai_file_entries:
-        est_tokens = int(size_kb * 256)
+    for file_path, size_kb, est_tokens in ai_file_entries:
         ai_listing_parts.append(f"{file_path}  ({size_kb:.1f} KB | ~{est_tokens} tokens)")
     ai_file_listing = "\n".join(ai_listing_parts)
 
