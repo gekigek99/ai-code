@@ -13,7 +13,7 @@ from lib.config import Config
 from lib.files import add_source
 from lib.tree import get_directory_tree
 from lib.tools.tool_source_generate import generate_source
-from lib.utils import warn, COLOR_CYAN, COLOR_RESET
+from lib.utils import warn, COLOR_CYAN, COLOR_RESET, play_bell
 
 
 def run_gen_source_workflow(cfg: Config, args: Namespace) -> None:
@@ -78,3 +78,7 @@ def run_gen_source_workflow(cfg: Config, args: Namespace) -> None:
             warn("pyperclip not installed — could not copy to clipboard.")
 
     print(f"\n[workflow_gen_source] Source generation complete ({len(result['source_list'])} entries).")
+
+    # Completion bell
+    if cfg.sound_enabled:
+        play_bell()

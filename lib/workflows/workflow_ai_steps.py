@@ -54,7 +54,7 @@ from lib.tree import get_directory_tree
 from lib.git import has_uncommitted_changes, commit_changes, revert_to_last_commit, is_git_available
 from lib.export import export_md_file, log_prompt
 from lib.memory import save_short_term_memory, clear_short_term_memory
-from lib.utils import warn, COLOR_GREEN, COLOR_YELLOW, COLOR_CYAN, COLOR_RESET
+from lib.utils import warn, COLOR_GREEN, COLOR_YELLOW, COLOR_CYAN, COLOR_RESET, play_bell
 
 from lib.tools.tool_source_generate import generate_source
 from lib.tools.tool_prompt_expand import expand_prompt
@@ -1091,3 +1091,7 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
         print(f"  Artifacts preserved at: {steps_output_dir}")
         print(f"  Run {COLOR_CYAN}-ai-steps{COLOR_RESET} again to start a new workflow (will prompt to delete these).")
         print(f"  Run {COLOR_CYAN}-ai-steps -continue{COLOR_RESET} to re-run skipped steps (if any).")
+
+    # Completion bell — plays when the workflow finishes naturally (not on quit)
+    if cfg.sound_enabled:
+        play_bell()

@@ -246,6 +246,8 @@ def get_recent_commits(
                 "hash": parts[1] if len(parts) > 1 else "???????",
                 "subject": parts[2] if len(parts) > 2 else "(no message)",
                 "files": [],
+                "total_added": 0,
+                "total_removed": 0,
             }
         elif line.strip() == "":
             # Blank separator line between commits — skip
@@ -265,6 +267,12 @@ def get_recent_commits(
                     current["files"].append(f"  {filename} (binary)")
                 else:
                     current["files"].append(f"  {filename} +{added} -{removed}")
+                    # Accumulate per-commit totals for the summary line
+                    try:
+                        current["total_added"] += int(added)
+                        current["total_removed"] += int(removed)
+                    except ValueError:
+                        pass
 
     # Flush the last commit
     if current is not None:
@@ -276,7 +284,10 @@ def get_recent_commits(
     # --- Build condensed output ---
     lines: list[str] = [f"## Git History (last {n} commits)"]
     for commit in commits:
-        lines.append(f"[{commit['hash']}] {commit['subject']}")
+        n_files = len(commit["files"])
+        stats = (f"({n_files} file{'s' if n_files != 1 else ''}, "
+                 f"+{commit['total_added']} -{commit['total_removed']})")
+        lines.append(f"[{commit['hash']}] {commit['subject']}  {stats}")
         for file_line in commit["files"]:
             lines.append(file_line)
 

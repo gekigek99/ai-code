@@ -164,6 +164,7 @@ class Config:
 
     # -- Features -------------------------------------------------------------
     patch_enabled: bool           # Allow PATCH action in JSON responses
+    sound_enabled: bool           # Play audible bell when workflows complete
 
     # -- Web search -----------------------------------------------------------
     websearch: bool
@@ -253,6 +254,7 @@ def load_config(script_dir: str) -> Config:
 
     # -- Features -------------------------------------------------------------
     patch_enabled = bool(raw.get("PATCH_ENABLED", True))
+    sound_enabled = bool(raw.get("SOUND_ENABLED", True))
 
     # -- Web search -----------------------------------------------------------
     websearch = bool(raw.get("WEBSEARCH", False))
@@ -307,6 +309,7 @@ def load_config(script_dir: str) -> Config:
         anthropic_max_tokens_think=anthropic_max_tokens_think,
         anthropic_temperature=anthropic_temperature,
         patch_enabled=patch_enabled,
+        sound_enabled=sound_enabled,
         websearch=websearch,
         websearch_max_results=websearch_max_results,
         script_dir=script_dir,

@@ -47,3 +47,34 @@ def strip_ansi(text: str) -> str:
 def warn(msg: str) -> None:
     """Print a warning in yellow to stdout."""
     print(f"{COLOR_YELLOW}{msg}{COLOR_RESET}")
+
+
+def play_bell() -> None:
+    """Play an audible notification sound (cross-platform: Windows + macOS).
+
+    Uses platform-specific APIs for reliable, non-blocking output.
+    Falls back to ASCII BEL character on unsupported platforms.
+    Silently swallows all errors — a missing sound must never block a workflow.
+    """
+    import platform
+
+    system = platform.system()
+    try:
+        if system == "Darwin":
+            # macOS: play a system sound asynchronously via afplay
+            import subprocess
+            subprocess.Popen(
+                ["afplay", "/System/Library/Sounds/Glass.aiff"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        elif system == "Windows":
+            # Windows: use the built-in winsound module
+            import winsound
+            winsound.MessageBeep(winsound.MB_OK)
+        else:
+            # Linux / other: ASCII BEL character
+            print("\a", end="", flush=True)
+    except Exception:
+        # Last resort fallback — BEL character
+        print("\a", end="", flush=True)

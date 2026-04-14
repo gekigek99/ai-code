@@ -52,6 +52,10 @@ ANTHROPIC:
 # treated as full-file EDITs (the content is written as-is).
 PATCH_ENABLED: true
 
+# Play an audible bell sound when -ai, -ai-steps, or -gen-source workflows
+# finish completely. Works on both Windows and macOS.
+SOUND_ENABLED: true
+
 # Web search configuration:
 # WEBSEARCH: master toggle to enable/disable automatic web searches that will be
 # included in the message_content sent to Claude (DuckDuckGo).

@@ -13,7 +13,7 @@ from lib.config import Config
 from lib.git import has_uncommitted_changes
 from lib.export import log_prompt
 from lib.tools.tool_prompt_execute import execute_prompt
-from lib.utils import COLOR_CYAN, COLOR_RESET
+from lib.utils import COLOR_CYAN, COLOR_RESET, play_bell
 
 
 def run_ai_workflow(cfg: Config, args: Namespace) -> None:
@@ -74,3 +74,7 @@ def run_ai_workflow(cfg: Config, args: Namespace) -> None:
 
     # -- 4. Log prompt for history --------------------------------------------
     log_prompt(cfg.prompt, cfg.logs_dir)
+
+    # -- 5. Completion bell ---------------------------------------------------
+    if cfg.sound_enabled:
+        play_bell()
