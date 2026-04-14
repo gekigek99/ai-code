@@ -908,6 +908,9 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
                     break
 
                 # Ask user whether to retry or skip
+                if cfg.sound_enabled:
+                    play_bell()
+
                 user_result = confirm_step(step_number, f"{step_title} [EXECUTION FAILED]")
                 if user_result["action"] == "retry" and user_result["modification"]:
                     current_prompt = step_prompt + "\n\nAdditional instructions:\n" + user_result["modification"]
@@ -957,6 +960,10 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
                     break
 
             # -- 3.3 Ask user to confirm -------------------------------------
+            # Play bell BEFORE prompting user input
+            if cfg.sound_enabled:
+                play_bell()
+
             user_result = confirm_step(step_number, step_title)
 
             if user_result["action"] == "continue":
@@ -1091,7 +1098,3 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
         print(f"  Artifacts preserved at: {steps_output_dir}")
         print(f"  Run {COLOR_CYAN}-ai-steps{COLOR_RESET} again to start a new workflow (will prompt to delete these).")
         print(f"  Run {COLOR_CYAN}-ai-steps -continue{COLOR_RESET} to re-run skipped steps (if any).")
-
-    # Completion bell — plays when the workflow finishes naturally (not on quit)
-    if cfg.sound_enabled:
-        play_bell()
