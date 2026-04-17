@@ -111,7 +111,7 @@ def prompt_claude(
         "system": system,
         "messages": messages,
         "thinking": (
-            {"type": "enabled", "budget_tokens": int(thinking_budget)}
+            {"type": "adaptive"}
             if thinking_budget and int(thinking_budget) > 0
             else {"type": "disabled"}
         ),
