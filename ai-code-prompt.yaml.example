@@ -35,21 +35,46 @@ system: |
   Be aggressive with code changes: remove code blocks, refactor the code, don't be afraid to rewrite conceptually the code. Make improvements by adding, removing or improving code blocks.
 
 
-ANTHROPIC:
+# ----- LLM provider selection ----- #
+# Selects which LLM provider/API to use for ALL workflows.
+# Allowed values: "anthropic", "openrouter".
+# Only the section matching PROVIDER below is consulted for API_KEY/MODEL.
+# Switching providers is a one-line change here — no code edits required.
+PROVIDER: anthropic
+
+# Anthropic native API (Claude only).
+# Used when PROVIDER == "anthropic".
+anthropic:
   API_KEY: sk-ant-api03-EXAMPLE-hEqqwgAA
-  # key name: 
+  # key name:
 
-  MAX_TOKENS: 32000
-  MAX_TOKENS_THINK: 5000
-
-  CLAUDE_MODEL: claude-opus-4-20250514
+  MODEL: claude-opus-4-20250514
   # claude-sonnet-4-20250514
   # claude-opus-4-20250514
 
-# When true, Claude may use SEARCH/REPLACE PATCH blocks for small, targeted
-# edits instead of rewriting entire files.  When false, the PATCH instruction
-# is omitted from the system prompt and any PATCH blocks in responses are
-# treated as full-file EDITs (the content is written as-is).
+# OpenRouter unified gateway (Claude, GPT, Gemini, DeepSeek, Llama, etc.).
+# Used when PROVIDER == "openrouter".
+# Browse models at https://openrouter.ai/models
+openrouter:
+  API_KEY: sk-or-v1-EXAMPLE-hEqqwgAA
+  # key name:
+
+  MODEL: anthropic/claude-sonnet-4
+  # anthropic/claude-opus-4
+  # openai/gpt-5
+  # deepseek/deepseek-v4-pro
+  # google/gemini-2.5-pro
+
+# ----- Provider-agnostic generation settings ----- #
+# These apply to whichever provider is currently active.
+MAX_TOKENS: 32000
+MAX_TOKENS_THINK: 5000
+# TEMPERATURE: 1.0   # optional — defaults to 1.0
+
+# When true, Claude/the model may use SEARCH/REPLACE PATCH blocks for small,
+# targeted edits instead of rewriting entire files.  When false, the PATCH
+# instruction is omitted from the system prompt and any PATCH blocks in
+# responses are treated as full-file EDITs (the content is written as-is).
 PATCH_ENABLED: true
 
 # Play an audible bell sound when -ai, -ai-steps, or -gen-source workflows
@@ -57,12 +82,15 @@ PATCH_ENABLED: true
 SOUND_ENABLED: true
 
 # Web search configuration:
-# WEBSEARCH: master toggle to enable/disable automatic web searches that will be
-# included in the message_content sent to Claude (DuckDuckGo).
+# WEBSEARCH: master toggle to enable/disable automatic web searches the
+# active provider may perform during generation.
+#   - anthropic:  uses Claude's native web_search tool.
+#   - openrouter: uses OpenRouter's web plugin (native search when supported,
+#                 Exa fallback otherwise).
 WEBSEARCH: false
 WEBSEARCH_MAX_RESULTS: 5
 
-# Memory system: provides Claude with persistent context across invocations.
+# Memory system: provides the LLM with persistent context across invocations.
 # Long-term memory is stored at <project_root>/.ai-code/memory/long-term.md and
 # tracked in the master project's git history.
 # Short-term memory is stored at <ai-code-dir>/memory/short-term.md for
@@ -77,3 +105,4 @@ MEMORY:
   LONG_TERM_MAX_TOKENS: 2000      # Soft cap: triggers compaction when exceeded
   SHORT_TERM_MAX_TOKENS: 1000     # Soft cap for short-term memory
   AUTO_UPDATE: true                # Auto-update project memory after each execution
+

@@ -42,9 +42,10 @@ def run_ai_workflow(cfg: Config, args: Namespace) -> None:
     # -- Show workflow configuration ------------------------------------------
     print(f"\n{COLOR_CYAN}{'=' * 60}")
     print(f"  AI WORKFLOW")
-    print(f"  Model: {cfg.anthropic_model}")
+    print(f"  Provider: {cfg.provider}")
+    print(f"  Model: {cfg.model}")
     print(f"  Web search: {'ENABLED (max_results=' + str(cfg.websearch_max_results) + ')' if cfg.websearch else 'DISABLED'}")
-    print(f"  Extended thinking: {'ENABLED (budget=' + str(cfg.anthropic_max_tokens_think) + ')' if cfg.anthropic_max_tokens_think > 0 else 'DISABLED'}")
+    print(f"  Extended thinking: {'ENABLED (budget=' + str(cfg.max_tokens_think) + ')' if cfg.max_tokens_think > 0 else 'DISABLED'}")
     print(f"{'=' * 60}{COLOR_RESET}\n")
 
     # -- 2. Determine file types and images -----------------------------------

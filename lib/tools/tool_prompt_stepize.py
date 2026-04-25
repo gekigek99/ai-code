@@ -34,7 +34,7 @@ from lib.memory import (
 from lib.token_tracker import compute_and_display_breakdown
 from lib.tree import get_directory_tree
 from lib.prompt_builder import build_message_content, build_stepize_meta_prompt, build_readable_prompt_export
-from lib.providers.claude import prompt_claude
+from lib.providers import prompt_llm
 from lib.validation import parse_response_json, validate_claude_response, ResponseParseError
 from lib.export import export_md_file
 from lib.utils import warn
@@ -178,21 +178,14 @@ def stepize_prompt(
     readable_prompt = build_readable_prompt_export(cfg.system, message_content)
     export_md_file(readable_prompt, "stepize-userfullprompt.md", output_dir)
 
-    # -- 5. Call Claude -------------------------------------------------------
-    # websearch and websearch_max_results are forwarded from cfg so that
-    # Claude can perform web searches when enabled — applies uniformly to
-    # all tool invocations within any workflow.
-    print("[tool_prompt_stepize] Asking Claude to decompose prompt into steps...")
-    result = prompt_claude(
-        api_key=cfg.anthropic_api_key,
-        model=cfg.anthropic_model,
-        system=cfg.system,
+    # -- 5. Call the LLM ------------------------------------------------------
+    # Provider-agnostic dispatch — prompt_llm reads cfg.provider and forwards
+    # to the appropriate backend.  Web search forwarding, system prompt, and
+    # generation knobs are all encapsulated by the dispatcher.
+    print(f"[tool_prompt_stepize] Asking LLM to decompose prompt into steps (provider={cfg.provider}, model={cfg.model})...")
+    result = prompt_llm(
+        cfg=cfg,
         messages=[{"role": "user", "content": message_content}],
-        max_tokens=cfg.anthropic_max_tokens,
-        temperature=cfg.anthropic_temperature,
-        websearch=cfg.websearch,
-        websearch_max_results=cfg.websearch_max_results,
-        thinking_budget=cfg.anthropic_max_tokens_think,
         stream=True,
         recv_path=os.path.join(output_dir, "stepize-recv.md"),
     )

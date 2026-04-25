@@ -32,7 +32,7 @@ from lib.export import export_md_file
 from lib.memory import build_memory_block
 from lib.token_tracker import compute_and_display_breakdown
 from lib.prompt_builder import generate_prompt_for_gen_source, build_readable_prompt_export
-from lib.providers.claude import prompt_claude
+from lib.providers import prompt_llm
 from lib.validation import parse_response_json, validate_claude_response, ResponseParseError
 
 
@@ -162,22 +162,15 @@ def generate_source(
     readable_prompt = build_readable_prompt_export(cfg.system, message_content)
     export_md_file(readable_prompt, "gen-source-userfullprompt.md", output_dir)
 
-    print("\n[tool_source_generate] Asking Claude for relevant source list...")
+    print(f"\n[tool_source_generate] Asking LLM for relevant source list (provider={cfg.provider}, model={cfg.model})...")
 
-    # -- Call Claude ----------------------------------------------------------
-    # websearch and websearch_max_results are forwarded from cfg so that
-    # Claude can perform web searches when enabled — applies uniformly to
-    # all tool invocations within any workflow.
-    result = prompt_claude(
-        api_key=cfg.anthropic_api_key,
-        model=cfg.anthropic_model,
-        system=cfg.system,
+    # -- Call the LLM ---------------------------------------------------------
+    # Provider-agnostic dispatch — prompt_llm reads cfg.provider and forwards
+    # to the appropriate backend.  Web search forwarding, system prompt, and
+    # generation knobs are all encapsulated by the dispatcher.
+    result = prompt_llm(
+        cfg=cfg,
         messages=[{"role": "user", "content": message_content}],
-        max_tokens=cfg.anthropic_max_tokens,
-        temperature=cfg.anthropic_temperature,
-        websearch=cfg.websearch,
-        websearch_max_results=cfg.websearch_max_results,
-        thinking_budget=cfg.anthropic_max_tokens_think,
         stream=True,
         recv_path=os.path.join(output_dir, "gen-source-recv.md"),
     )

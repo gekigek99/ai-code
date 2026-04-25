@@ -577,9 +577,10 @@ def run_ai_steps_workflow(cfg: Config, args: Namespace) -> None:
     # stepize, and execute).
     print(f"\n{'=' * 60}")
     print(f"  AI-STEPS WORKFLOW")
-    print(f"  Model: {cfg.anthropic_model}")
+    print(f"  Provider: {cfg.provider}")
+    print(f"  Model: {cfg.model}")
     print(f"  Web search: {_websearch_status_str(cfg)}")
-    print(f"  Extended thinking: {'ENABLED (budget=' + str(cfg.anthropic_max_tokens_think) + ')' if cfg.anthropic_max_tokens_think > 0 else 'DISABLED'}")
+    print(f"  Extended thinking: {'ENABLED (budget=' + str(cfg.max_tokens_think) + ')' if cfg.max_tokens_think > 0 else 'DISABLED'}")
     print(f"  Minimal prompt: {cfg.prompt[:80]}{'...' if len(cfg.prompt) > 80 else ''}")
     if continue_mode:
         print(f"  Mode: RESUMING from saved checkpoint")

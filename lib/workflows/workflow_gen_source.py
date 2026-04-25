@@ -35,7 +35,8 @@ def run_gen_source_workflow(cfg: Config, args: Namespace) -> None:
     # -- Show workflow configuration ------------------------------------------
     print(f"\n{COLOR_CYAN}{'=' * 60}")
     print(f"  GEN-SOURCE WORKFLOW")
-    print(f"  Model: {cfg.anthropic_model}")
+    print(f"  Provider: {cfg.provider}")
+    print(f"  Model: {cfg.model}")
     print(f"  Web search: {'ENABLED (max_results=' + str(cfg.websearch_max_results) + ')' if cfg.websearch else 'DISABLED'}")
     print(f"{'=' * 60}{COLOR_RESET}\n")
 

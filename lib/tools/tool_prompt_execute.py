@@ -34,7 +34,7 @@ from lib.memory import (
     extract_and_save_memory_from_response,
 )
 from lib.token_tracker import compute_and_display_breakdown
-from lib.providers.claude import prompt_claude
+from lib.providers import prompt_llm
 from lib.validation import parse_response_json, validate_claude_response, ResponseParseError
 from lib.apply import claude_data_to_file
 from lib.export import export_md_file
@@ -201,17 +201,12 @@ def execute_prompt(
     # websearch and websearch_max_results are forwarded from cfg so that
     # Claude can perform web searches when enabled — applies to all workflows
     # (ai, ai-steps, gen-source) uniformly.
-    print(f"\n[tool_prompt_execute] Sending request to Claude...")
-    result = prompt_claude(
-        api_key=cfg.anthropic_api_key,
-        model=cfg.anthropic_model,
-        system=cfg.system,
+    print(f"\n[tool_prompt_execute] Sending request to LLM (provider={cfg.provider}, model={cfg.model})...")
+    # Provider-agnostic dispatch — prompt_llm reads cfg.provider and forwards
+    # to the appropriate backend (Claude native or OpenRouter).
+    result = prompt_llm(
+        cfg=cfg,
         messages=[{"role": "user", "content": message_content}],
-        max_tokens=cfg.anthropic_max_tokens,
-        temperature=cfg.anthropic_temperature,
-        websearch=cfg.websearch,
-        websearch_max_results=cfg.websearch_max_results,
-        thinking_budget=cfg.anthropic_max_tokens_think,
         stream=True,
         recv_path=os.path.join(output_dir, f"{label}clauderesponse-recv.md"),
     )

@@ -220,11 +220,20 @@ prompt: |
 system: |
   AI assistant for code tasks.
 
-ANTHROPIC:
+# Provider selection — "anthropic" or "openrouter".
+PROVIDER: anthropic
+
+anthropic:
   API_KEY: sk-ant-api03-YOUR-KEY-HERE
-  MAX_TOKENS: 32000
-  MAX_TOKENS_THINK: 5000
-  CLAUDE_MODEL: claude-sonnet-4-20250514
+  MODEL: claude-sonnet-4-20250514
+
+openrouter:
+  API_KEY: sk-or-v1-YOUR-KEY-HERE
+  MODEL: anthropic/claude-sonnet-4
+
+# Provider-agnostic generation settings
+MAX_TOKENS: 32000
+MAX_TOKENS_THINK: 5000
 
 WEBSEARCH: false
 WEBSEARCH_MAX_RESULTS: 5

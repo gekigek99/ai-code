@@ -7,28 +7,41 @@ Public API:
         Read ``ai-code-prompt.yaml`` from *script_dir*, resolve all paths and
         defaults, and return a fully populated Config instance.
 
+Provider selection:
+    The active LLM provider is chosen via the top-level ``PROVIDER`` YAML key
+    (``anthropic`` or ``openrouter``).  Each provider has its own sub-section
+    with ``API_KEY`` and ``MODEL``.  Provider-agnostic generation knobs
+    (``MAX_TOKENS``, ``MAX_TOKENS_THINK``, ``TEMPERATURE``) live at the top
+    level and apply to whichever provider is active.
+
 No module-level side effects.  ``load_config`` must be called explicitly from
 ``main()`` and the returned Config passed to all downstream functions.
 """
 
 import os
-import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List
 
 import yaml
 
 
 # ------------------------------------------------------------------------------
-# JSON output suffix — instructs Claude to respond with structured JSON
+# Allowed provider identifiers.  Centralised here so the loader, the dispatcher,
+# and any future tooling all reference the same canonical list.
+# ------------------------------------------------------------------------------
+_ALLOWED_PROVIDERS = ("anthropic", "openrouter")
+
+
+# ------------------------------------------------------------------------------
+# JSON output suffix — instructs the LLM to respond with structured JSON
 # containing file operations instead of free-form text.
 # ------------------------------------------------------------------------------
 
 def _build_json_output_suffix(patch_enabled: bool) -> str:
-    """Return the system prompt suffix that instructs Claude to output JSON.
+    """Return the system prompt suffix that instructs the LLM to output JSON.
 
     When *patch_enabled* is False the PATCH action and all its rules are
-    omitted entirely so Claude never attempts partial-file edits.
+    omitted entirely so the LLM never attempts partial-file edits.
     """
 
     # -- PATCH action definition (conditional) -----------------------------
@@ -146,6 +159,17 @@ class Config:
 
     Every downstream function receives (parts of) this object rather than
     reading module-level globals.
+
+    Provider-agnostic LLM access:
+        ``provider``     selects the active backend ("anthropic" | "openrouter").
+        ``api_key``      resolved from the active provider's section.
+        ``model``        resolved from the active provider's section.
+        ``max_tokens``,
+        ``max_tokens_think``,
+        ``temperature``  apply to whichever provider is active.
+
+    Callers should NEVER hard-code provider-specific names — use
+    ``lib.providers.prompt_llm(cfg, ...)`` to dispatch transparently.
     """
 
     # -- Source / prompt ------------------------------------------------------
@@ -155,12 +179,13 @@ class Config:
     prompt: str
     system: str  # Full system prompt with JSON output suffix appended
 
-    # -- Anthropic / Claude ---------------------------------------------------
-    anthropic_api_key: str
-    anthropic_model: str
-    anthropic_max_tokens: int
-    anthropic_max_tokens_think: int
-    anthropic_temperature: float
+    # -- LLM provider (provider-agnostic) -------------------------------------
+    provider: str            # "anthropic" | "openrouter"
+    api_key: str             # Resolved from <provider>.API_KEY
+    model: str               # Resolved from <provider>.MODEL
+    max_tokens: int          # Top-level MAX_TOKENS
+    max_tokens_think: int    # Top-level MAX_TOKENS_THINK
+    temperature: float       # Top-level TEMPERATURE (default 1.0)
 
     # -- Features -------------------------------------------------------------
     patch_enabled: bool           # Allow PATCH action in JSON responses
@@ -193,38 +218,47 @@ class Config:
     memory_short_term_dir: str        # <script_dir>/memory/
 
 
+def _resolve_provider_section(raw: dict, provider: str) -> dict:
+    """Return the provider-specific YAML section as a dict.
+
+    Performs case-insensitive lookup against the YAML top-level keys so that
+    ``anthropic:``, ``Anthropic:``, and ``ANTHROPIC:`` all resolve correctly.
+    This is purely defensive — the canonical key is lowercase per the example
+    config — but it spares users from confusing silent failures when they
+    typo the section header.
+    """
+    target = provider.lower()
+    for key, value in raw.items():
+        if isinstance(key, str) and key.lower() == target:
+            return value if isinstance(value, dict) else {}
+    return {}
+
+
 def load_config(script_dir: str) -> Config:
     """Read ``ai-code-prompt.yaml`` from *script_dir* and return a Config.
 
-    Parameters
-    ----------
-    script_dir : str
-        Absolute path to the directory containing the entry-point script
-        (``ai-code.py``).  The YAML config file is expected at
-        ``<script_dir>/ai-code-prompt.yaml``.
-
-    Returns
-    -------
-    Config
-        Fully resolved configuration dataclass.
+    Provider resolution:
+      1. ``PROVIDER`` top-level key selects the active backend.
+      2. ``<provider>:`` sub-section supplies ``API_KEY`` and ``MODEL``.
+      3. ``MAX_TOKENS``, ``MAX_TOKENS_THINK``, ``TEMPERATURE`` are top-level
+         and provider-agnostic.
 
     Raises
     ------
     FileNotFoundError
         If the YAML file does not exist.
+    ValueError
+        If ``PROVIDER`` is unknown, or the chosen provider section is missing
+        ``API_KEY`` or ``MODEL``.
     """
     config_path = os.path.join(script_dir, "ai-code-prompt.yaml")
 
     with open(config_path, "r", encoding="utf-8") as f:
-        raw = yaml.safe_load(f)
+        raw = yaml.safe_load(f) or {}
 
-    # -- Extract top-level keys with safe defaults ----------------------------
-    anthropic = raw.get("ANTHROPIC", {})
-
+    # -- Source / prompt -----------------------------------------------------
     # Sanitize all list-type config values to remove None entries that arise
     # from YAML lines like ``- # comment`` (which parse as None list items).
-    # This prevents TypeError crashes in downstream code that calls
-    # os.path.abspath() or similar on each entry.
     source = _sanitize_string_list(raw.get("source")) or ["."]
     tree_dirs = _sanitize_string_list(raw.get("tree_dirs")) or source
     exclude_patterns = _sanitize_string_list(raw.get("exclude_patterns")) or []
@@ -236,36 +270,54 @@ def load_config(script_dir: str) -> Config:
     if ".ai-code/" not in exclude_patterns:
         exclude_patterns.append(".ai-code/")
 
-    # Build the full system prompt by appending the JSON output suffix.
+    # -- System prompt + JSON output suffix ---------------------------------
     raw_system = raw.get("system") or ""
-    patch_enabled = raw.get("PATCH_ENABLED") or ""
-    suffix = _build_json_output_suffix(bool(patch_enabled))
+    patch_enabled = bool(raw.get("PATCH_ENABLED", True))
+    suffix = _build_json_output_suffix(patch_enabled)
     system = raw_system + suffix
 
-    # -- Anthropic settings ---------------------------------------------------
-    anthropic_api_key = anthropic.get("API_KEY", "")
-    anthropic_model = anthropic.get("CLAUDE_MODEL", "claude-sonnet-4-20250514")
-    anthropic_max_tokens = int(anthropic.get("MAX_TOKENS", 4000))
-    anthropic_max_tokens_think = int(anthropic.get("MAX_TOKENS_THINK", 0))
+    # -- LLM provider selection ---------------------------------------------
+    # Default to "anthropic" so configs predating the provider system still
+    # work after upgrade (assuming they retain an ``anthropic:`` section).
+    provider_raw = raw.get("PROVIDER")
+    provider = (provider_raw or "anthropic").strip().lower()
+    if provider not in _ALLOWED_PROVIDERS:
+        raise ValueError(
+            f"Unknown PROVIDER {provider!r}. "
+            f"Allowed: {', '.join(_ALLOWED_PROVIDERS)}."
+        )
 
-    # Temperature is optional; default to 1.0 when absent or None
-    raw_temp = anthropic.get("TEMPERATURE")
-    anthropic_temperature = float(raw_temp) if raw_temp is not None else 1.0
+    provider_section = _resolve_provider_section(raw, provider)
+    api_key = (provider_section.get("API_KEY") or "").strip()
+    model = (provider_section.get("MODEL") or "").strip()
 
-    # -- Features -------------------------------------------------------------
-    patch_enabled = bool(raw.get("PATCH_ENABLED", True))
+    if not api_key:
+        raise ValueError(
+            f"Missing API_KEY in '{provider}' section of {config_path}. "
+            f"Add:\n  {provider}:\n    API_KEY: <your-key>\n    MODEL: <model>"
+        )
+    if not model:
+        raise ValueError(
+            f"Missing MODEL in '{provider}' section of {config_path}. "
+            f"Add:\n  {provider}:\n    API_KEY: <your-key>\n    MODEL: <model>"
+        )
+
+    # -- Provider-agnostic generation knobs ---------------------------------
+    # Top-level so they apply uniformly regardless of which provider is on.
+    max_tokens = int(raw.get("MAX_TOKENS", 4000))
+    max_tokens_think = int(raw.get("MAX_TOKENS_THINK", 0))
+    raw_temp = raw.get("TEMPERATURE")
+    temperature = float(raw_temp) if raw_temp is not None else 1.0
+
+    # -- Features ------------------------------------------------------------
     sound_enabled = bool(raw.get("SOUND_ENABLED", True))
 
-    # -- Web search -----------------------------------------------------------
+    # -- Web search ---------------------------------------------------------
     websearch = bool(raw.get("WEBSEARCH", False))
     websearch_max_results = int(raw.get("WEBSEARCH_MAX_RESULTS", 5))
 
-    # -- Memory ---------------------------------------------------------------
-    # Follows the same nested-dict pattern as ANTHROPIC: grab the sub-dict
-    # first, then pull individual keys with defaults.  Every key has a
-    # sensible default so an entirely absent MEMORY section still yields a
-    # working (enabled) memory subsystem.
-    memory = raw.get("MEMORY", {})
+    # -- Memory -------------------------------------------------------------
+    memory = raw.get("MEMORY", {}) or {}
     memory_enabled = bool(memory.get("ENABLED", True))
     memory_long_term_enabled = bool(memory.get("LONG_TERM_ENABLED", True))
     memory_short_term_enabled = bool(memory.get("SHORT_TERM_ENABLED", True))
@@ -275,7 +327,7 @@ def load_config(script_dir: str) -> Config:
     memory_short_term_max_tokens = int(memory.get("SHORT_TERM_MAX_TOKENS", 1000))
     memory_auto_update = bool(memory.get("AUTO_UPDATE", True))
 
-    # -- Paths ----------------------------------------------------------------
+    # -- Paths --------------------------------------------------------------
     script_dir_name = os.path.basename(script_dir)
     logs_dir = os.path.join(script_dir, "logs")
     claude_output_dir = os.path.join(logs_dir, "claude")
@@ -303,11 +355,12 @@ def load_config(script_dir: str) -> Config:
         exclude_patterns=exclude_patterns,
         prompt=prompt,
         system=system,
-        anthropic_api_key=anthropic_api_key,
-        anthropic_model=anthropic_model,
-        anthropic_max_tokens=anthropic_max_tokens,
-        anthropic_max_tokens_think=anthropic_max_tokens_think,
-        anthropic_temperature=anthropic_temperature,
+        provider=provider,
+        api_key=api_key,
+        model=model,
+        max_tokens=max_tokens,
+        max_tokens_think=max_tokens_think,
+        temperature=temperature,
         patch_enabled=patch_enabled,
         sound_enabled=sound_enabled,
         websearch=websearch,
